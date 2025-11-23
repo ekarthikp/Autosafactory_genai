@@ -1,0 +1,16 @@
+# AUTOSAR Architecture Agent - Dependencies
+# ==========================================
+
+# Web UI
+streamlit>=1.28.0
+
+# AI Providers (install the ones you need)
+google-generativeai>=0.3.0   # For Gemini
+openai>=1.0.0                # For OpenAI/GPT
+anthropic>=0.18.0            # For Claude
+
+# XML Processing (optional, for ARXML analysis)
+lxml>=4.9.0
+
+# Utilities
+python-dotenv>=1.0.0

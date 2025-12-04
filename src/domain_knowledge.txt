@@ -1,0 +1,250 @@
+For Signal to service:
+
+he implementation of the signal/service translation on the Classic platform
+is done in an Application Software Component above the RTE. This applies for events
+and field notifiers. Methods are handled separately
+System Template
+AUTOSAR CP R24-11Gateway ECUTranslationApplication SWCRTECOM-StackSerializerE2E TransformerSOME/IP Serialized BytesabcdabcdComPduCOM BasedTransformerE2E TransformerSignalServiceMappingSOME/IPHeader
+Figure 6.134: Signal/Service Translation Application Software Component
+For the signal-based part the full functionality of the Classic platform COM-Stack is
+available and may be configured such that the signal-based ISignalIPdus may orig-
+inate from a variety of sources (Can, Lin, FlexRay) and the ISignalIPdus may be
+safety and security protected.
+For the service-oriented part it has to be guaranteed that the defined SOME/IP Service
+actually is compatible to the Adaptive platform. This applies for the payload part (e.g.
+the SOME/IP serializer has to be used) as well as for the control path using BswM and
+ServiceDiscovery.
+The behavioral part of the Translation Software Component itself defines how the data
+from signal-based side is transported to the service-oriented side, and vice versa (see
+section 6.16.4).
+The following terminology is used in the context of signal/service translation:
+Signal/service translation defines the feature this chapter is concerned with. It does
+not prescribe a specific translation direction
+System Template
+AUTOSAR CP R24-11
+6.16.1.1 Method handling
+The handling of methods (or getter/setter calls of fields) has to be serialized using the
+SOME/IP transformer. And this is only supported on Ethernet networks (see [con-
+str_5117]).
+Therefore there is no need to perform a translation because the methods are already
+usable on the adaptive platform.
+6.16.2 Mapping description
+Signal/service translation is used to alter the serialization representation of
+data to be compatible with the respective transport network. I.e. on an Ethernet net-
+work a SOME/IP serialized data representation is mostly suitable, while on a CAN
+network the packed signal-based data representation often required due to the low
+payload data size available.
+As indicated in section 6.16.1 the implementation of the translation shall be done in
+an Application Software Component above the RTE. For the definition of the intended
+mapping and behavior however the CompositionSwComponentType is used. This
+allows to represent the requirements on the translation and still allow some freedom
+with respect to the actual implementation later on.
+The element which defines the behavioral aspects of the signal/service trans-
+lation is the meta-class SignalServiceTranslationProps. The references
+to the VariableDataPrototype in the role translationTarget define to which
+events the SignalServiceTranslationProps apply. For this reference a Vari-
+ableDataPrototypeInSystemInstanceRef is used (see also chapter B.8).
+• In case of signal-service-translation the SignalServiceTransla-
+tionProps.translationTarget collect all resulting events which belong to
+one provided service instance.
+• In case of service-signal-translation the SignalServiceTransla-
+tionProps.translationTarget collect all resulting signals which are trans-
+lated from one service instance
+System Template
+AUTOSAR CP R24-11
+4
+Class SignalServiceTranslationProps
+controlPnc PncMappingIdent * ref Reference to the PNCs which control the offer/subscribe
+behavior of the translated service instance.
+Stereotypes: atpSplitable
+Tags: atp.Splitkey=controlPnc
+controlProvided
+EventGroup
+EventHandler * ref Reference to the provided event group (aka Event
+Handler) which is automatically available when service
+Control equals translationStart.
+serviceControl SignalService
+TranslationControlEnum
+0..1 attr Defines how the service instance control shall behave.
+signalService
+Translation
+EventProps
+SignalService
+TranslationEventProps
+* aggr Defines properties for a single translated event.
+Table 6.342: SignalServiceTranslationProps
+Class SignalServiceTranslationEventProps
+Package M2::AUTOSARTemplates::CommonStructure::SignalServiceTranslation
+Note This element allows to define the properties which are applicable for the signal/service translation event.
+Base ARObject, Identifiable, MultilanguageReferrable, Referrable
+Aggregated by SignalServiceTranslationProps.signalServiceTranslationEventProps
+Attribute Type Mult. Kind Note
+elementProps SignalService
+TranslationElement
+Props
+* aggr Defines properties for a single translated element.
+safeTranslation Boolean 0..1 attr Defined whether the translation shall happen in a safe
+way.
+secure
+Translation
+Boolean 0..1 attr Defined whether the translation shall happen in a secure
+way.
+translation
+Target
+VariableDataPrototype 0..1 iref Reference to a VariableDataPrototype representing the
+target of signal/service translation.
+InstanceRef implemented by: VariableDataPrototypeIn
+SystemInstanceRef
+Table 6.343: SignalServiceTranslationEventProps
+A simple signal/service translation setup is to have a one-to-one correspon-
+dence between the signal-based data definition and the service-oriented data defini-
+tion. This is illustrated in figure 6.136.
+Here the setup allows for a simple PassThroughSwConnector because the involved
+PortInterfaces are identical.
+Please consult with [constr_1248] in the Software Component Template [4] for details
+on the compatibility of connected PortInterfaces.
+Note that the translated P1.dataX and P2.dataB may be configured in the COM-Stack
+to be events that belong to one service instance or to belong to two different ser-
+vice instances. The setup in the example of figure 6.136 uses two SignalSer-
+viceTranslationProps elements and those use SignalServiceTranslation-
+EventProps, indicating that P1.dataX belongs to a different service instance than
+P2.dataB
+
+=======================================================================
+ETHERNET CLUSTER CONFIGURATION
+=======================================================================
+
+Pattern for Ethernet Communication Setup:
+
+1. Create EthernetCluster:
+   ethernet_cluster = pkg.new_EthernetCluster("ClusterName")
+
+2. Create EthernetClusterVariant (returns EthernetClusterConditional):
+   ethernet_variant = ethernet_cluster.new_EthernetClusterVariant("VariantName")
+   
+3. Create EthernetPhysicalChannel:
+   ethernet_channel = ethernet_variant.new_EthernetPhysicalChannel("ChannelName")
+   
+4. IMPORTANT: The pattern is similar to CAN:
+   - new_CanClusterVariant() returns CanClusterConditional
+   - new_EthernetClusterVariant() returns EthernetClusterConditional
+   
+5. DO NOT use:
+   - ethernet_cluster.new_EthernetPhysicalChannel() - WRONG! This method doesn't exist on EthernetCluster
+   
+6. CORRECT Usage:
+   eth_cluster = comm_pkg.new_EthernetCluster("MyEthernet")
+   eth_variant = eth_cluster.new_EthernetClusterVariant("Variant1")
+   eth_channel = eth_variant.new_EthernetPhysicalChannel("Channel1")
+
+=======================================================================
+SERVICE INTERFACE AND SOME/IP DEPLOYMENT
+=======================================================================
+
+Pattern for Service Interface Creation:
+
+1. Create Service Interface:
+   si = pkg.new_ServiceInterface("MyService")
+
+2. Add Event (NOT new_ServiceEvent!):
+   event = si.new_Event("MyEvent")
+   event.set_type(impl_data_type)
+
+3. Add Method:
+   method = si.new_Method("MyMethod")
+
+4. Event Groups:
+   - EventGroups are typically NOT created directly on ServiceInterface in this version.
+   - They are managed via Deployment or specific configuration.
+
+Pattern for SOME/IP Deployment (CRITICAL: Use 'Someip' not 'SomeIp'):
+
+1. Create Deployment Package:
+   deploy_pkg = root.new_ARPackage("Deployment")
+
+2. Create Service Interface Deployment:
+   si_deploy = deploy_pkg.new_SomeipServiceInterfaceDeployment("Deploy_SI")
+   si_deploy.set_serviceInterface(si)
+   si_deploy.set_serviceInterfaceId(0x1234)
+
+3. Create Event Deployment:
+   event_deploy = si_deploy.new_SomeipEventDeployment("Deploy_Event")
+   event_deploy.set_event(event)
+   event_deploy.set_eventId(0x8001)
+
+4. Create Provided Service Instance (on ECU):
+   instance = ecu.new_ProvidedSomeipServiceInstance("MyInstance")
+   instance.set_serviceInterfaceDeployment(si_deploy)
+   instance.set_serviceInstanceId(0x0001)
+
+
+=======================================================================
+SIGNAL TO SERVICE TRANSLATION (S2S)
+=======================================================================
+
+Pattern for SignalServiceTranslationProps:
+
+1. Create Props on Composition:
+   props = composition.new_SignalServiceTranslationProps("S2S_Props")
+   props.set_serviceControl(autosarfactory.SignalServiceTranslationControlEnum.VALUE_TRANSLATION_START)
+
+2. Create Event Props:
+   event_props = props.new_SignalServiceTranslationEventProps("EventProps")
+   
+   # Create Translation Target Reference (InstanceRef):
+   # DO NOT use create_ref_to_translationTarget()!
+   target_ref = event_props.new_TranslationTarget()
+   target_ref.set_contextComponent(gateway_comp_proto)
+   target_ref.set_contextPort(pp_vehicle_info)
+   target_ref.set_targetDataPrototype(event)
+
+3. Create Element Props (for Signal):
+   element_props = event_props.new_SignalServiceTranslationElementProps("ElementProps")
+   
+   # Create Translation Target Reference:
+   target_ref = element_props.new_TranslationTarget()
+   target_ref.set_contextComponent(gateway_comp_proto)
+   target_ref.set_contextPort(rp_vehicle_speed)
+   target_ref.set_targetDataPrototype(data_element)
+
+4. Composition Components:
+   # Use new_Component(), NOT new_SwComponentPrototype()!
+   comp_proto = composition.new_Component("Sensor")
+   comp_proto.set_type(sensor_swc)
+
+
+=======================================================================
+SYSTEM MAPPING HIERARCHY
+=======================================================================
+
+Correct structure for mapping SWCs to ECUs:
+
+1. Create System:
+   system = package.new_System("SystemName")
+   system.set_rootSoftwareComposition(composition)
+
+2. Create SystemMapping (INSIDE System):
+   sys_map = system.new_Mapping("SystemMappingName")
+
+3. Create SwcToEcuMapping (INSIDE SystemMapping):
+   swc_map = sys_map.new_SwcToEcuMapping("MapName")
+   swc_map.set_swComponentPrototype(comp_proto)  # Reference to prototype in composition
+   swc_map.set_ecuInstance(ecu_instance)
+
+
+=======================================================================
+SIGNAL TO SERVICE TRANSLATION PROPS
+=======================================================================
+
+Correct structure for S2S Props:
+
+1. Create PropsSet in a Package (e.g., System Package):
+   props_set = package.new_SignalServiceTranslationPropsSet("PropsSetName")
+
+2. Create Props in the PropsSet:
+   props = props_set.new_SignalServiceTranslationProps("PropsName")
+
+3. Link to Composition:
+   props.set_composition(composition)
+
+

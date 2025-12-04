@@ -2,12 +2,15 @@ import re
 from src.utils import get_llm_model
 from src.knowledge import inspect_class
 from src.patterns import CRITICAL_API_HINTS, get_minimal_example
+from src.knowledge_manager import KnowledgeManager
 
 class Fixer:
-    def __init__(self):
+    def __init__(self, max_attempts=5, enable_deep_analysis=True):
         self.model = get_llm_model()
         self.previous_errors = []  # Track previous errors to detect repeated failures
         self.fix_attempts = 0
+        self.max_attempts = max_attempts
+        self.enable_deep_analysis = enable_deep_analysis
 
     def _extract_error_line(self, error_log):
         """Extract the line number from the error traceback."""
@@ -56,16 +59,70 @@ class Fixer:
                 classes.update(cls_list)
 
         return list(classes)
+    
+    def _deep_analyze_error(self, code, error_info, plan):
+        """
+        Deep analysis of error before attempting fix.
+        Uses error feedback to find similar past errors and successful fixes.
+        
+        Args:
+            code: The failing code
+            error_info: Structured error information (dict or string)
+            plan: The execution plan
+            
+        Returns:
+            Dictionary with analysis insights
+        """
+        from src.error_feedback_manager import get_error_feedback_manager
+        efm = get_error_feedback_manager()
+        
+        # Extract error message
+        if isinstance(error_info, dict):
+            error_message = error_info.get('message', str(error_info))
+            error_type = error_info.get('type', 'Unknown')
+        else:
+            error_message = str(error_info)
+            error_type = 'Unknown'
+        
+        # Find similar past errors
+        similar_errors = efm.get_similar_errors(error_message, limit=3)
+        
+        # Get fix suggestions
+        fix_suggestions = efm.get_fix_suggestions(error_type, error_message)
+        
+        # Build analysis
+        analysis = {
+            "error_type": error_type,
+            "similar_errors_found": len(similar_errors),
+            "past_successful_fixes": fix_suggestions,
+            "success_rate_for_type": efm.get_success_rate_for_error_type(error_type)
+        }
+        
+        return analysis
 
     def fix_code(self, code, error_log, plan):
         """
         Fixes the code based on the error log with API knowledge.
         """
         self.fix_attempts += 1
+        
+        # Check max attempts
+        if self.fix_attempts > self.max_attempts:
+            print(f"   ⚠️  Max fix attempts ({self.max_attempts}) reached.")
+            return code  # Return code as-is
+        
+        # Deep analysis of the error (if enabled)
+        analysis = None
+        if self.enable_deep_analysis:
+            print(f"   🔍 Deep analyzing error (attempt {self.fix_attempts})...")
+            analysis = self._deep_analyze_error(code, error_log, plan)
+            
+            if analysis.get('past_successful_fixes'):
+                print(f"   💡 Found {len(analysis['past_successful_fixes'])} similar past fixes")
 
         # Check if we're seeing repeated errors - if so, be more aggressive with commenting out
-        is_repeated = self._is_repeated_error(error_log)
-        error_line = self._extract_error_line(error_log)
+        is_repeated = self._is_repeated_error(error_log if isinstance(error_log, str) else error_log.get('traceback', ''))
+        error_line = self._extract_error_line(error_log if isinstance(error_log, str) else error_log.get('traceback', ''))
 
         additional_instructions = ""
         if is_repeated:
@@ -84,15 +141,51 @@ IMPORTANT: Multiple fix attempts have been made. If the error persists on specif
 consider COMMENTING OUT the problematic code sections to allow partial generation.
 Add a TODO comment explaining what could not be implemented.
 """
+        
+        # Add analysis insights to instructions
+        if analysis and analysis.get('past_successful_fixes'):
+            additional_instructions += f"""
+
+PAST SUCCESSFUL FIXES FOR SIMILAR ERRORS:
+{chr(10).join('- ' + f for f in analysis['past_successful_fixes'])}
+
+Apply similar strategies if applicable.
+"""
 
         # Get relevant API knowledge based on the error
-        relevant_classes = self._extract_relevant_classes_from_error(error_log, code)
-        api_context = []
+        from src.knowledge_manager import KnowledgeManager
+        km = KnowledgeManager()
+        
+        # Extract error text for processing (handle both dict and string)
+        if isinstance(error_log, dict):
+            error_text = error_log.get('traceback', '') + ' ' + error_log.get('message', '')
+            error_type = error_log.get('type', '')
+        else:
+            error_text = str(error_log)
+            error_type = ''
+        
+        relevant_classes = self._extract_relevant_classes_from_error(error_text, code)
+        
+        # Use KM to find method origins if AttributeError
+        if "AttributeError" in error_text or error_type == "AttributeError":
+            # Try to extract the attribute name
+            import re
+            match = re.search(r"has no attribute '(\w+)'", error_text)
+            if match:
+                attr_name = match.group(1)
+                origin_classes = km.find_method_origin(attr_name)
+                if origin_classes:
+                    relevant_classes.extend(origin_classes)
+                    additional_instructions += f"\n\nHINT: The method '{attr_name}' is defined in {origin_classes}. Check if you are using the correct object."
+
+        # Build context with dependencies
+        expanded_classes = set(relevant_classes)
         for cls in relevant_classes:
-            info = inspect_class(cls)
-            if "not found" not in info:
-                api_context.append(info)
-        api_context_str = "\n\n".join(api_context) if api_context else "No specific API context extracted."
+            deps = km.get_dependencies(cls, recursive=True, max_depth=1)
+            expanded_classes.update(deps)
+            
+        api_context_str = km.get_context_for_classes(list(expanded_classes))
+
 
         prompt = f"""
 You are an Expert Python Debugger for AUTOSAR code using the 'autosarfactory' library.
@@ -105,7 +198,7 @@ FAILED CODE:
 ```
 
 ERROR LOG:
-{error_log}
+{error_text}
 
 ORIGINAL PLAN:
 {plan['checklist']}
@@ -113,66 +206,32 @@ ORIGINAL PLAN:
 {CRITICAL_API_HINTS}
 
 RELEVANT API KNOWLEDGE (for classes mentioned in the error):
-{api_context_str}
-
-WORKING EXAMPLE FOR REFERENCE:
-{get_minimal_example()}
-
-COMMON FIXES FOR TYPICAL ERRORS:
-
-1. "AttributeError: 'X' object has no attribute 'set_Y'" errors:
-   - WRONG: obj.set_frame(frame) or obj.set_iSignal(signal)
-   - RIGHT: Create a *Ref child, then set_value():
-     frame_ref = obj.new_FrameRef()
-     frame_ref.set_value(frame)
-
-2. "AttributeError: 'CanCluster' has no attribute 'set_baudrate'":
-   - Baudrate is set on CanClusterConditional (returned by new_CanClusterVariant), NOT CanCluster:
-     can_cluster_variant = can_cluster.new_CanClusterVariant("VariantName")
-     can_cluster_variant.set_baudrate(500000)  # Direct call on CanClusterConditional
-   - DO NOT use get_canClusterConfig() or new_CanClusterConfig() - these methods don't exist!
-
-3. "TypeError: missing required argument 'name'":
-   - Methods like new_ISignalToPduMapping, new_PduToFrameMapping, new_CanFrameTriggering REQUIRE a name argument
-   - WRONG: pdu.new_ISignalToPduMapping()
-   - RIGHT: pdu.new_ISignalToPduMapping("SignalMapping_Name")
-
-4. "AttributeError: 'X' has no attribute 'new_DataReadAccess'":
-   - Note the spelling in autosarfactory: DataReadAcces (one 's')
-   - WRONG: runnable.new_DataReadAccess("name")
-   - RIGHT: runnable.new_DataReadAcces("name")
-
-5. Verification errors (missing elements):
-   - Ensure all elements are created within proper ARPackages
-   - Ensure autosarfactory.save() is called at the end
-   - Check that all references are properly linked
-
-6. ByteOrderEnum errors (TypeError for set_packingByteOrder):
-   - WRONG: set_packingByteOrder("MOST-SIGNIFICANT-BYTE-LAST")
-   - RIGHT: set_packingByteOrder(autosarfactory.ByteOrderEnum.VALUE_MOST_SIGNIFICANT_BYTE_LAST)
-
-7. "AttributeError: 'CanPhysicalChannel' has no attribute 'new_PduToFrameMapping'":
-   - PduToFrameMapping is created on the FRAME, not the channel!
-   - WRONG: channel.new_PduToFrameMapping("name")
-   - RIGHT: frame.new_PduToFrameMapping("name")
-
-IMPORTANT: If you cannot fix a particular line of code after trying, COMMENT IT OUT with a TODO explaining what was attempted and why it failed. DO NOT leave broken code - either fix it or comment it out so the rest of the script can run.
-{additional_instructions}
-TASK:
-1. Analyze the error carefully
-2. Apply the appropriate fix based on the patterns above
-3. If you absolutely cannot fix a line, COMMENT IT OUT rather than leaving broken code
-4. Return ONLY the complete fixed Python script
 
 FIXED PYTHON SCRIPT:
 """
         print("   Fixing code with API knowledge...")
-        response = self.model.generate_content(prompt)
-        code = response.text
+        
+        try:
+            # Internal retry loop to force changes
+            for internal_attempt in range(2):
+                response = self.model.generate_content(prompt)
+                fixed_code = response.text
 
-        if "```python" in code:
-            code = code.split("```python")[1].split("```")[0]
-        elif "```" in code:
-            code = code.split("```")[1].split("```")[0]
+                if "```python" in fixed_code:
+                    fixed_code = fixed_code.split("```python")[1].split("```")[0]
+                elif "```" in fixed_code:
+                    fixed_code = fixed_code.split("```")[1].split("```")[0]
+                
+                fixed_code = fixed_code.strip()
+                
+                if fixed_code != code:
+                    return fixed_code
+                
+                print(f"   ⚠️ Fixer returned identical code (internal attempt {internal_attempt + 1}). Retrying with stronger prompt...")
+                prompt += "\n\nCRITICAL: You returned the EXACT SAME code as before. You MUST make changes to fix the error. If you cannot fix it, comment out the failing lines."
 
-        return code.strip()
+            return fixed_code
+
+        except Exception as e:
+            print(f"   ❌ Fixer LLM call failed: {e}")
+            return code # Return original code on failure

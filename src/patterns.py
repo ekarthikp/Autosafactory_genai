@@ -158,6 +158,69 @@ DO NOT use patterns like new_*Ref() + set_value() - these methods don't exist!
     - new_TimingEvent("EventName")
     - new_DataReadAcces("AccessName")
     - new_DataWriteAcces("AccessName")
+
+18. ETHERNET CLUSTER CONFIGURATION (CRITICAL!):
+    - WRONG: ethernet_cluster.new_EthernetPhysicalChannel("Name")
+    - RIGHT: Create Variant first, then Channel on the Variant (Conditional):
+      eth_cluster = pkg.new_EthernetCluster("EthCluster")
+      eth_variant = eth_cluster.new_EthernetClusterVariant("EthVariant") # Returns EthernetClusterConditional
+      eth_channel = eth_variant.new_EthernetPhysicalChannel("EthChannel")
+
+19. SW BASE TYPE SIZE:
+    - WRONG: new_SwBaseType("uint16", 16)
+    - RIGHT: Create SwBaseType, then BaseTypeDirectDefinition, then set size:
+      uint16 = pkg.new_SwBaseType("uint16")
+      uint16_def = uint16.new_BaseTypeDirectDefinition()
+      uint16_def.set_baseTypeSize(16)
+
+20. SENDER-RECEIVER INTERFACE DATA ELEMENT:
+    - WRONG: sri.new_VariableDataPrototype("Name")
+    - RIGHT: sri.new_DataElement("Name")
+
+21. SERVICE INTERFACE EVENT:
+    - WRONG: si.new_ServiceEvent("Name")
+    - RIGHT: si.new_Event("Name")
+
+22. SOME/IP NAMING (CRITICAL - Lowercase 'p'!):
+    - WRONG: new_SomeIpServiceInterfaceDeployment, new_SomeIpEventDeployment
+    - RIGHT: new_SomeipServiceInterfaceDeployment, new_SomeipEventDeployment
+    - RIGHT: new_ProvidedSomeipServiceInstance
+
+23. COMPOSITION COMPONENTS:
+    - WRONG: new_SwComponentPrototype("Name")
+    - WRONG: new_ComponentPrototype("Name")
+    - RIGHT: new_Component("Name")  # Returns SwComponentPrototype
+
+24. INSTANCE REFERENCES (e.g., for S2S Translation):
+    - WRONG: create_ref_to_translationTarget(...)
+    - RIGHT: Create the reference object, then set context/target:
+      ref = props.new_TranslationTarget()  # Returns InstanceRef
+      ref.set_contextComponent(component_proto)
+      ref.set_targetDataPrototype(data_element)
+
+25. EVENT GROUPS:
+    - WRONG: si.new_EventGroup("Name")
+    - RIGHT: EventGroups are NOT created on ServiceInterface in this version.
+             They are typically handled via Deployment or configuration.
+
+26. SYSTEM MAPPING & ECU MAPPING:
+    - WRONG: system.new_SwcToEcuMapping(...) or package.new_SwcToEcuMapping(...)
+    - RIGHT: Must be created inside a SystemMapping container:
+      sys_map = system.new_Mapping("Name")
+      swc_map = sys_map.new_SwcToEcuMapping("Name")
+
+27. CAN FRAME TRIGGERING:
+    - WRONG: frame.new_CanFrameTriggering(...)
+    - RIGHT: Created on the Physical Channel:
+      trig = channel.new_CanFrameTriggering("Name")
+      trig.set_frame(frame)
+
+28. SIGNAL TO SERVICE TRANSLATION PROPS:
+    - WRONG: composition.new_SignalServiceTranslationProps(...)
+    - RIGHT: Must be created in a PropsSet in a Package:
+      props_set = package.new_SignalServiceTranslationPropsSet("Name")
+      props = props_set.new_SignalServiceTranslationProps("Name")
+      props.set_composition(composition)
 """
 
 # Working code pattern for CAN cluster setup

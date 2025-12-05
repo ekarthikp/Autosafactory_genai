@@ -11,6 +11,7 @@ An AI-powered tool for generating and editing AUTOSAR ARXML files using natural 
 - **Automatic Error Recovery**: Up to 10 retry attempts with intelligent code fixing
 - **Web UI & CLI**: Use Streamlit web interface or command line
 - **Knowledge-Based Generation**: Uses autosarfactory library patterns for accurate code
+- **RAG-Enhanced Intelligence**: Uses Retrieval-Augmented Generation to understand complex AUTOSAR concepts (from TPS PDF) and ensure accurate API usage (from codebase).
  
 ## Installation
  
@@ -25,6 +26,8 @@ An AI-powered tool for generating and editing AUTOSAR ARXML files using natural 
 pip install -r requirements.txt
 ```
  
+*Note: This will install packages for RAG support including `langchain`, `chromadb`, and `sentence-transformers`.*
+
 ### API Keys
  
 Set at least one of these environment variables:
@@ -49,13 +52,14 @@ streamlit run app.py
 ```
  
 Then open http://localhost:8501 in your browser.
- 
+
 **Features:**
 - Select AI provider and model from sidebar
 - Upload existing ARXML files for editing
 - Chat-based interface for requirements
 - Download generated ARXML and Python scripts
- 
+- **Automatic Knowledge Base**: The system automatically ingests the AUTOSAR TPS specification and Codebase API on first run.
+
 ### Command Line Interface
  
 ```bash
@@ -86,6 +90,18 @@ python -m src.main --list-providers
 | `--max-retries, -r N` | Max fix attempts (default: 10) |
 | `--list-providers, -l` | Show available providers |
  
+## RAG System (Knowledge Base)
+
+The agent uses a dual RAG (Retrieval-Augmented Generation) system to improve accuracy:
+
+1.  **TPS Knowledge Base**: Indexes the `AUTOSAR_CP_TPS_SystemTemplate.pdf` to understand high-level concepts (e.g., "Ethernet Cluster", "Service Oriented Architecture"). This helps in the **Planning Phase**.
+2.  **Codebase Knowledge Base**: Indexes the `autosarfactory` library to understand the exact Python API (classes, methods, signatures). This helps in the **Code Generation Phase**.
+
+**Initialization**:
+- The knowledge bases are automatically initialized the first time you run the application.
+- This process may take 1-2 minutes as it ingests the PDF and codebase.
+- Data is persisted locally in `tps_knowledge_db/` and `codebase_knowledge_db/`.
+
 ## Examples
  
 ### Create a CAN Network
@@ -114,6 +130,12 @@ python -m src.main --edit network.arxml "Change the timing event period to 10ms"
 python -m src.main "Create a signal routing from frame 0x100 to frame 0x200
 with a gateway software component"
 ```
+
+### Complex Architectures (New!)
+
+```bash
+python -m src.main "Create a Service Oriented Architecture for Ethernet with SomeIP"
+```
  
 ## Architecture
  
@@ -122,8 +144,11 @@ Autosafactory_gen/
 ├── app.py                 # Streamlit Web UI
 ├── src/
 │   ├── main.py           # CLI entry point
-│   ├── planner.py        # AI planning phase
-│   ├── generator.py      # Code generation with patterns
+│   ├── planner.py        # AI planning phase (uses TPS RAG)
+│   ├── generator.py      # Code generation (uses Codebase RAG)
+│   ├── rag_tps.py        # TPS PDF Knowledge Base
+│   ├── rag_codebase.py   # Codebase API Knowledge Base
+│   ├── rag_utils.py      # Shared RAG utilities
 │   ├── executor.py       # Script execution & verification
 │   ├── fixer.py          # Error recovery & code fixing
 │   ├── utils.py          # Multi-provider LLM utilities
@@ -131,17 +156,18 @@ Autosafactory_gen/
 │   ├── patterns.py       # Working code patterns
 │   └── arxml_analyzer.py # Parse existing ARXML files
 ├── autosarfactory/       # AUTOSAR factory library
-├── knowledge_base.pkl    # Pre-computed API knowledge
+├── tps_knowledge_db/     # Vector store for TPS (generated)
+├── codebase_knowledge_db/# Vector store for API (generated)
 └── providers/            # Provider implementations
 ```
  
 ## How It Works
  
-1. **Planning**: AI analyzes your requirement and creates a step-by-step plan
-2. **Generation**: Generates Python code using autosarfactory patterns
-3. **Execution**: Runs the script to create/modify ARXML
-4. **Verification**: Validates the generated ARXML structure
-5. **Fixing**: If errors occur, AI analyzes and fixes the code (up to 10 retries)
+1.  **Planning**: AI analyzes your requirement using **TPS RAG** to understand the architectural needs.
+2.  **Generation**: Generates Python code using **Codebase RAG** to find the correct `autosarfactory` classes and methods.
+3.  **Execution**: Runs the script to create/modify ARXML.
+4.  **Verification**: Validates the generated ARXML structure.
+5.  **Fixing**: If errors occur, AI analyzes and fixes the code (up to 10 retries).
  
 ## Supported AUTOSAR Elements
  
@@ -201,4 +227,3 @@ MIT License - see [LICENSE](LICENSE) for details.
  
 - Built on the [autosarfactory](https://github.com/girishchandranc/autosarfactory) library
 - Powered by Gemini, OpenAI, and Anthropic AI models
- 

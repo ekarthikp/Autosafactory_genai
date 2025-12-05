@@ -1,6 +1,7 @@
 import json
 from src.utils import get_llm_model
 from src.knowledge_manager import KnowledgeManager
+from src.rag_tps import TPSKnowledgeBase
 
 # AUTOSAR element dependencies - what elements need to be created together
 ELEMENT_DEPENDENCIES = """
@@ -67,6 +68,11 @@ class Planner:
     def __init__(self):
         self.model = get_llm_model()
         self.km = KnowledgeManager()
+        self.tps_kb = None
+        try:
+            self.tps_kb = TPSKnowledgeBase()
+        except Exception as e:
+            print(f"Warning: Could not initialize TPS Knowledge Base: {e}")
 
     def create_plan(self, user_input, edit_context=None):
         """
@@ -94,6 +100,15 @@ IMPORTANT EDIT MODE RULES:
         # Get Domain Knowledge
         domain_knowledge = self.km.search_domain_knowledge(user_input)
 
+        # Get TPS Context (RAG)
+        tps_context = ""
+        if self.tps_kb:
+            try:
+                tps_context = self.tps_kb.query(user_input)
+                tps_context = f"\nRELEVANT AUTOSAR SPECIFICATION (TPS):\n{tps_context}\n"
+            except Exception as e:
+                print(f"Warning: TPS RAG query failed: {e}")
+
         # 1. DECOMPOSITION STEP
         # Break down the request into architectural blocks
         decomposition_prompt = f"""
@@ -102,6 +117,7 @@ Analyze the following user requirement and break it down into major architectura
 User Requirement: "{user_input}"
 
 {domain_knowledge}
+{tps_context}
 
 Identify if this is a "Simple" or "Complex" request.
 - Simple: Just creating a few elements (e.g., "Create a CAN cluster").
@@ -150,6 +166,7 @@ User Requirement:
 "{user_input}"
 
 {domain_knowledge}
+{tps_context}
 
 {edit_section}
 {ELEMENT_DEPENDENCIES}

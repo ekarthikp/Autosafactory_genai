@@ -25,6 +25,32 @@ from src.utils import (
 )
 
 
+@st.cache_resource
+def init_rag_system():
+    """
+    Initialize RAG Knowledge Bases.
+    Cached resource to run only once per session.
+    """
+    try:
+        print("Initializing RAG System...")
+        from src.rag_tps import TPSKnowledgeBase
+        from src.rag_codebase import CodebaseKnowledgeBase
+        # Force initialization/ingestion
+        TPSKnowledgeBase()
+        CodebaseKnowledgeBase()
+        print("RAG System Initialized.")
+        return True
+    except Exception as e:
+        print(f"Failed to init RAG: {e}")
+        return False
+
+def check_rag_status():
+    """
+    Updates session state based on cached init status.
+    """
+    if init_rag_system():
+        st.session_state.rag_initialized = True
+
 def init_session_state():
     """Initialize all session state variables."""
     # Initialize Knowledge Manager
@@ -59,6 +85,10 @@ def init_session_state():
         st.session_state.selected_provider = None
     if "selected_model" not in st.session_state:
         st.session_state.selected_model = None
+    if "rag_initialized" not in st.session_state:
+        st.session_state.rag_initialized = False
+        # Trigger background initialization
+        check_rag_status()
     # Edit mode state
     if "edit_mode" not in st.session_state:
         st.session_state.edit_mode = False
@@ -264,6 +294,17 @@ def main():
                 st.json(stats)
         except Exception as e:
             st.caption(f"Error stats not available: {e}")
+
+        st.divider()
+
+        # RAG Status
+        st.header("🧠 Knowledge Base")
+        if st.session_state.rag_initialized:
+             st.success("✅ RAG System Active")
+             st.caption("TPS + Codebase Context Loaded")
+        else:
+             st.warning("⏳ Initializing RAG System...")
+             st.caption("First run may take a minute to ingest data.")
 
         st.divider()
 

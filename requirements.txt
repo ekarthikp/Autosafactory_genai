@@ -14,3 +14,11 @@ lxml>=4.9.0
 
 # Utilities
 python-dotenv>=1.0.0
+
+# RAG & Embeddings
+langchain
+langchain-community
+langchain-huggingface
+chromadb
+pypdf
+sentence-transformers

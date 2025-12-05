@@ -102,7 +102,11 @@ class Fixer:
 
     def fix_code(self, code, error_log, plan):
         """
-        Fixes the code based on the error log with API knowledge.
+        Fixes the code based on the error log.
+        OPTIMIZED: Uses tiered fixing strategy to minimize LLM calls.
+        Tier 1: Deterministic fixes (NO LLM)
+        Tier 2: Pattern-based fixes (NO LLM)
+        Tier 3: LLM fix (only if tiers 1-2 fail)
         """
         self.fix_attempts += 1
         
@@ -111,18 +115,43 @@ class Fixer:
             print(f"   ⚠️  Max fix attempts ({self.max_attempts}) reached.")
             return code  # Return code as-is
         
+        # Extract error text for processing (handle both dict and string)
+        if isinstance(error_log, dict):
+            error_text = error_log.get('traceback', '') + ' ' + error_log.get('message', '')
+            error_type = error_log.get('type', '')
+            error_message = error_log.get('message', '')
+        else:
+            error_text = str(error_log)
+            error_type = ''
+            error_message = str(error_log)
+        
+        # === TIER 1: Deterministic fixes (NO LLM) ===
+        print(f"   🔧 Tier 1: Trying deterministic fixes...")
+        fixed_code = self._apply_deterministic_fixes(code, error_message, error_type)
+        if fixed_code != code:
+            print(f"   ✅ Tier 1 fix applied!")
+            return fixed_code
+        
+        # === TIER 2: Pattern-based fixes (NO LLM) ===
+        print(f"   🔧 Tier 2: Trying pattern-based fixes...")
+        fixed_code = self._apply_pattern_fixes(code, error_message)
+        if fixed_code != code:
+            print(f"   ✅ Tier 2 fix applied!")
+            return fixed_code
+        
+        # === TIER 3: LLM fix (fallback) ===
+        print(f"   🤖 Tier 3: Using LLM to fix (attempt {self.fix_attempts})...")
+        
         # Deep analysis of the error (if enabled)
         analysis = None
         if self.enable_deep_analysis:
-            print(f"   🔍 Deep analyzing error (attempt {self.fix_attempts})...")
             analysis = self._deep_analyze_error(code, error_log, plan)
-            
             if analysis.get('past_successful_fixes'):
                 print(f"   💡 Found {len(analysis['past_successful_fixes'])} similar past fixes")
 
-        # Check if we're seeing repeated errors - if so, be more aggressive with commenting out
-        is_repeated = self._is_repeated_error(error_log if isinstance(error_log, str) else error_log.get('traceback', ''))
-        error_line = self._extract_error_line(error_log if isinstance(error_log, str) else error_log.get('traceback', ''))
+        # Check if we're seeing repeated errors
+        is_repeated = self._is_repeated_error(error_text)
+        error_line = self._extract_error_line(error_text)
 
         additional_instructions = ""
         if is_repeated:
@@ -152,41 +181,6 @@ PAST SUCCESSFUL FIXES FOR SIMILAR ERRORS:
 Apply similar strategies if applicable.
 """
 
-        # Get relevant API knowledge based on the error
-        from src.knowledge_manager import KnowledgeManager
-        km = KnowledgeManager()
-        
-        # Extract error text for processing (handle both dict and string)
-        if isinstance(error_log, dict):
-            error_text = error_log.get('traceback', '') + ' ' + error_log.get('message', '')
-            error_type = error_log.get('type', '')
-        else:
-            error_text = str(error_log)
-            error_type = ''
-        
-        relevant_classes = self._extract_relevant_classes_from_error(error_text, code)
-        
-        # Use KM to find method origins if AttributeError
-        if "AttributeError" in error_text or error_type == "AttributeError":
-            # Try to extract the attribute name
-            import re
-            match = re.search(r"has no attribute '(\w+)'", error_text)
-            if match:
-                attr_name = match.group(1)
-                origin_classes = km.find_method_origin(attr_name)
-                if origin_classes:
-                    relevant_classes.extend(origin_classes)
-                    additional_instructions += f"\n\nHINT: The method '{attr_name}' is defined in {origin_classes}. Check if you are using the correct object."
-
-        # Build context with dependencies
-        expanded_classes = set(relevant_classes)
-        for cls in relevant_classes:
-            deps = km.get_dependencies(cls, recursive=True, max_depth=1)
-            expanded_classes.update(deps)
-            
-        api_context_str = km.get_context_for_classes(list(expanded_classes))
-
-
         prompt = f"""
 You are an Expert Python Debugger for AUTOSAR code using the 'autosarfactory' library.
 
@@ -205,11 +199,10 @@ ORIGINAL PLAN:
 
 {CRITICAL_API_HINTS}
 
-RELEVANT API KNOWLEDGE (for classes mentioned in the error):
+{additional_instructions}
 
 FIXED PYTHON SCRIPT:
 """
-        print("   Fixing code with API knowledge...")
         
         try:
             # Internal retry loop to force changes
@@ -235,3 +228,89 @@ FIXED PYTHON SCRIPT:
         except Exception as e:
             print(f"   ❌ Fixer LLM call failed: {e}")
             return code # Return original code on failure
+
+    def _apply_deterministic_fixes(self, code: str, error_message: str, error_type: str) -> str:
+        """
+        Apply known deterministic fixes based on error patterns.
+        These are common API mistakes that can be fixed without LLM calls.
+        """
+        # Map of error patterns to (old_string, new_string) fixes
+        error_fixes = {
+            # Method name mistakes
+            "has no attribute 'new_SwcInternalBehavior'": 
+                ('new_SwcInternalBehavior', 'new_InternalBehavior'),
+            "has no attribute 'new_RunnableEntity'":
+                ('new_RunnableEntity', 'new_Runnable'),
+            "has no attribute 'new_DataReadAccess'":
+                ('new_DataReadAccess', 'new_DataReadAcces'),
+            "has no attribute 'new_DataWriteAccess'":
+                ('new_DataWriteAccess', 'new_DataWriteAcces'),
+            "has no attribute 'new_VariableDataPrototype'":
+                ('new_VariableDataPrototype', 'new_DataElement'),
+            "has no attribute 'new_ServiceEvent'":
+                ('new_ServiceEvent', 'new_Event'),
+            "has no attribute 'new_SwComponentPrototype'":
+                ('new_SwComponentPrototype', 'new_Component'),
+            "has no attribute 'new_ComponentPrototype'":
+                ('new_ComponentPrototype', 'new_Component'),
+            # SOME/IP naming (lowercase 'p')
+            "has no attribute 'new_SomeIpServiceInterfaceDeployment'":
+                ('new_SomeIpServiceInterfaceDeployment', 'new_SomeipServiceInterfaceDeployment'),
+            "has no attribute 'new_SomeIpEventDeployment'":
+                ('new_SomeIpEventDeployment', 'new_SomeipEventDeployment'),
+            # Reference pattern mistakes
+            "has no attribute 'set_value'":
+                None,  # Special handling needed
+        }
+        
+        for error_pattern, fix in error_fixes.items():
+            if error_pattern in error_message and fix:
+                old, new = fix
+                if old in code:
+                    return code.replace(old, new)
+        
+        return code
+
+    def _apply_pattern_fixes(self, code: str, error_message: str) -> str:
+        """
+        Apply regex-based pattern fixes for more complex issues.
+        """
+        import re
+        
+        # Fix common reference patterns: new_*Ref() -> set_*()
+        # This pattern catches things like ".new_FrameRef().set_value(frame)"
+        # and replaces with ".set_frame(frame)"
+        ref_pattern = r'\.new_(\w+)Ref\(\)\.set_value\((\w+)\)'
+        def ref_replacement(match):
+            ref_type = match.group(1)
+            value = match.group(2)
+            # Convert CamelCase to lowercase for setter
+            setter_name = ref_type[0].lower() + ref_type[1:]
+            return f'.set_{setter_name}({value})'
+        
+        fixed = re.sub(ref_pattern, ref_replacement, code)
+        if fixed != code:
+            return fixed
+        
+        # Fix ByteOrder string usage
+        byte_order_patterns = [
+            (r'set_packingByteOrder\(["\']MOST-SIGNIFICANT-BYTE-LAST["\']\)',
+             'set_packingByteOrder(autosarfactory.ByteOrderEnum.VALUE_MOST_SIGNIFICANT_BYTE_LAST)'),
+            (r'set_packingByteOrder\(["\']MOST-SIGNIFICANT-BYTE-FIRST["\']\)',
+             'set_packingByteOrder(autosarfactory.ByteOrderEnum.VALUE_MOST_SIGNIFICANT_BYTE_FIRST)'),
+        ]
+        
+        for pattern, replacement in byte_order_patterns:
+            fixed = re.sub(pattern, replacement, code)
+            if fixed != code:
+                return fixed
+        
+        # Fix save() with arguments (incorrect signature)
+        save_pattern = r'autosarfactory\.save\([^)]+\)'
+        if re.search(save_pattern, code):
+            fixed = re.sub(save_pattern, 'autosarfactory.save()', code)
+            if fixed != code:
+                return fixed
+        
+        return code
+

@@ -424,25 +424,73 @@ def get_minimal_example():
     """Returns the minimal working example."""
     return MINIMAL_EXAMPLE
 
-def get_pattern_for_task(task_keywords):
-    """Returns relevant patterns based on task keywords."""
-    patterns = []
+def get_pattern_for_task(task_keywords, max_patterns=3):
+    """
+    Returns ONLY the most relevant patterns based on task keywords.
+    OPTIMIZED: Limits to top N patterns to reduce prompt token count.
+    """
     task_lower = task_keywords.lower()
+    
+    # Pattern definitions with their trigger keywords
+    pattern_configs = [
+        {
+            'pattern': CAN_CLUSTER_PATTERN,
+            'keywords': ['cluster', 'can', 'baudrate', 'channel', 'variant'],
+            'name': 'CAN_CLUSTER'
+        },
+        {
+            'pattern': CAN_FRAME_PATTERN,
+            'keywords': ['frame', 'triggering', 'dlc', 'framelength', 'identifier'],
+            'name': 'CAN_FRAME'
+        },
+        {
+            'pattern': SIGNAL_PDU_PATTERN,
+            'keywords': ['signal', 'pdu', 'isignal', 'ipdu', 'mapping', 'byte order'],
+            'name': 'SIGNAL_PDU'
+        },
+        {
+            'pattern': SWC_PATTERN,
+            'keywords': ['component', 'swc', 'port', 'interface', 'behavior', 'runnable', 'timing'],
+            'name': 'SWC'
+        },
+        {
+            'pattern': DATA_TYPE_PATTERN,
+            'keywords': ['type', 'datatype', 'basetype', 'uint', 'implementation'],
+            'name': 'DATA_TYPE'
+        },
+    ]
+    
+    # Score each pattern by keyword overlap
+    scored_patterns = []
+    for config in pattern_configs:
+        score = sum(1 for kw in config['keywords'] if kw in task_lower)
+        if score > 0:
+            scored_patterns.append((score, config['pattern'], config['name']))
+    
+    # Sort by score (highest first) and take top N
+    scored_patterns.sort(reverse=True)
+    selected = scored_patterns[:max_patterns]
+    
+    if selected:
+        pattern_names = [name for _, _, name in selected]
+        print(f"   📋 Selected patterns: {', '.join(pattern_names)}")
+        patterns_text = "\n".join(pattern for _, pattern, _ in selected)
+    else:
+        # Fallback: include minimal example if no keywords matched
+        patterns_text = MINIMAL_EXAMPLE
+    
+    # Only include critical hints (condensed version)
+    return f"""
+CRITICAL API NOTES:
+- Use DIRECT SETTERS for references: set_frame(obj), set_iSignal(obj), set_pdu(obj)
+- Baudrate: set on CanClusterConditional (returned by new_CanClusterVariant)
+- InternalBehavior: swc.new_InternalBehavior() NOT new_SwcInternalBehavior()  
+- Runnable: behavior.new_Runnable() NOT new_RunnableEntity()
+- DataAccess: new_DataReadAcces (one 's'!), new_DataWriteAcces (one 's'!)
+- ByteOrder: use autosarfactory.ByteOrderEnum.VALUE_MOST_SIGNIFICANT_BYTE_LAST
+- PduToFrameMapping: create on FRAME object, not channel
 
-    if "cluster" in task_lower or "baudrate" in task_lower:
-        patterns.append(CAN_CLUSTER_PATTERN)
+RELEVANT PATTERNS:
+{patterns_text}
+"""
 
-    if "frame" in task_lower:
-        patterns.append(CAN_FRAME_PATTERN)
-
-    if "signal" in task_lower or "pdu" in task_lower:
-        patterns.append(SIGNAL_PDU_PATTERN)
-
-    if "component" in task_lower or "swc" in task_lower or "port" in task_lower:
-        patterns.append(SWC_PATTERN)
-
-    if "type" in task_lower or "datatype" in task_lower:
-        patterns.append(DATA_TYPE_PATTERN)
-
-    # Always include critical hints
-    return CRITICAL_API_HINTS + "\n\nRELEVANT PATTERNS:\n" + "\n".join(patterns)

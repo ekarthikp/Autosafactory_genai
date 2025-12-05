@@ -393,7 +393,76 @@ GENERATE THE COMPLETE PYTHON SCRIPT:
         elif "```" in code:
             code = code.split("```")[1].split("```")[0]
 
-        return code.strip()
+        # PRE-EXECUTION VALIDATION: Fix known API mistakes before execution
+        code = self._validate_and_fix_api_calls(code.strip())
+
+        return code
+
+    def _validate_and_fix_api_calls(self, code: str) -> str:
+        """
+        Parse generated code and fix known common mistakes before execution.
+        This is faster and more reliable than LLM-based fixing for known patterns.
+        """
+        import re
+        
+        # === Method name corrections ===
+        method_fixes = [
+            ('new_SwcInternalBehavior', 'new_InternalBehavior'),
+            ('new_RunnableEntity', 'new_Runnable'),
+            ('new_DataReadAccess', 'new_DataReadAcces'),  # Note: one 's'
+            ('new_DataWriteAccess', 'new_DataWriteAcces'),  # Note: one 's'
+            ('new_VariableDataPrototype', 'new_DataElement'),
+            ('new_ServiceEvent', 'new_Event'),
+            ('new_SwComponentPrototype', 'new_Component'),
+            ('new_ComponentPrototype', 'new_Component'),
+            # SOME/IP naming (lowercase 'p')
+            ('new_SomeIpServiceInterfaceDeployment', 'new_SomeipServiceInterfaceDeployment'),
+            ('new_SomeIpEventDeployment', 'new_SomeipEventDeployment'),
+        ]
+        
+        for old, new in method_fixes:
+            if old in code:
+                code = code.replace(old, new)
+                print(f"   🔧 Pre-validation: Fixed {old} -> {new}")
+        
+        # === Reference pattern fixes (regex) ===
+        # Fix patterns like ".new_FrameRef().set_value(frame)" -> ".set_frame(frame)"
+        ref_pattern = r'\.new_(\w+)Ref\(\)\.set_value\((\w+)\)'
+        def ref_replacement(match):
+            ref_type = match.group(1)
+            value = match.group(2)
+            setter_name = ref_type[0].lower() + ref_type[1:]
+            return f'.set_{setter_name}({value})'
+        
+        new_code = re.sub(ref_pattern, ref_replacement, code)
+        if new_code != code:
+            print(f"   🔧 Pre-validation: Fixed reference pattern")
+            code = new_code
+        
+        # === ByteOrder string fixes ===
+        byte_order_fixes = [
+            (r'set_packingByteOrder\(["\']MOST-SIGNIFICANT-BYTE-LAST["\']\)',
+             'set_packingByteOrder(autosarfactory.ByteOrderEnum.VALUE_MOST_SIGNIFICANT_BYTE_LAST)'),
+            (r'set_packingByteOrder\(["\']MOST-SIGNIFICANT-BYTE-FIRST["\']\)',
+             'set_packingByteOrder(autosarfactory.ByteOrderEnum.VALUE_MOST_SIGNIFICANT_BYTE_FIRST)'),
+        ]
+        
+        for pattern, replacement in byte_order_fixes:
+            new_code = re.sub(pattern, replacement, code)
+            if new_code != code:
+                print(f"   🔧 Pre-validation: Fixed ByteOrder enum")
+                code = new_code
+                break
+        
+        # === Fix incorrect save() signature ===
+        save_pattern = r'autosarfactory\.save\([^)]+\)'
+        if re.search(save_pattern, code):
+            new_code = re.sub(save_pattern, 'autosarfactory.save()', code)
+            if new_code != code:
+                print(f"   🔧 Pre-validation: Fixed save() signature")
+                code = new_code
+        
+        return code
 
     def _identify_classes(self, plan):
         """

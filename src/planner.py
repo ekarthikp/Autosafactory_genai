@@ -77,7 +77,7 @@ class Planner:
     def create_plan(self, user_input, edit_context=None):
         """
         Generates a structured checklist plan from user input with API awareness.
-        Uses a DEEP PLANNING strategy for complex requests.
+        OPTIMIZED: Single unified LLM call instead of separate decomposition + planning calls.
         """
         # Build edit mode section if applicable
         edit_section = ""
@@ -91,7 +91,7 @@ Output File: {output_file}
 
 IMPORTANT EDIT MODE RULES:
 - Use autosarfactory.read(["{source_file}"]) to load the existing file - NOT new_file()!
-- Navigate to existing packages using get_ARPackage("PackageName")
+- Navigate to existing packages using iteration (get_arPackages(), get_elements())
 - Add new elements to existing packages where appropriate
 - DO NOT recreate elements that already exist in the file
 - Save with autosarfactory.save() when done
@@ -109,57 +109,9 @@ IMPORTANT EDIT MODE RULES:
             except Exception as e:
                 print(f"Warning: TPS RAG query failed: {e}")
 
-        # 1. DECOMPOSITION STEP
-        # Break down the request into architectural blocks
-        decomposition_prompt = f"""
-You are an Expert AUTOSAR Architect.
-Analyze the following user requirement and break it down into major architectural blocks.
-User Requirement: "{user_input}"
-
-{domain_knowledge}
-{tps_context}
-
-Identify if this is a "Simple" or "Complex" request.
-- Simple: Just creating a few elements (e.g., "Create a CAN cluster").
-- Complex: Involves multiple layers, signal-to-service mapping, full ECU configuration, or many dependencies.
-
-If Complex, list the major subsystems that need to be built (e.g., "Communication Layer", "Application Layer", "Service Layer", "DataType Definition").
-
-Return a JSON object:
-{{
-  "complexity": "Simple" or "Complex",
-  "blocks": ["Block 1", "Block 2", ...]
-}}
-"""
-        try:
-            resp = self.model.generate_content(decomposition_prompt)
-            decomp = json.loads(self._clean_json(resp.text))
-            complexity = decomp.get("complexity", "Simple")
-        except:
-            complexity = "Simple" # Fallback
-
-        # 2. DETAILED PLANNING STEP
-        # Adjust prompt based on complexity
-        if complexity == "Complex":
-            planning_instruction = """
-THIS IS A COMPLEX REQUEST. YOU MUST GENERATE A "HUGE" AND DETAILED PLAN.
-DO NOT SIMPLIFY. BREAK DOWN EVERY SINGLE ELEMENT.
-
-For "Signal to Service" or similar complex scenarios, you must include:
-1. Service Interface & Service Instance (Provided/Required)
-2. Ethernet/CAN Cluster & Physical Channel
-3. Socket Adaptor / SoAd Config (if Ethernet) or CanTp (if CAN)
-4. PDU Definition (ISignalIPdu) & Mapping to Frame
-5. Signal Definition (ISignal) & Mapping to PDU
-6. SOME/IP Transformation Props (if applicable)
-7. Application Component & Ports
-8. Port-to-Service Mapping
-"""
-        else:
-            planning_instruction = "Generate a standard detailed checklist."
-
+        # UNIFIED PLANNING PROMPT - single LLM call instead of two
         prompt = f"""
-You are an AUTOSAR Architecture Planner with deep knowledge of the autosarfactory library.
+You are an Expert AUTOSAR Architecture Planner with deep knowledge of the autosarfactory library.
 Your goal is to create a precise, step-by-step checklist that will guide code generation.
 
 User Requirement:
@@ -169,9 +121,22 @@ User Requirement:
 {tps_context}
 
 {edit_section}
-{ELEMENT_DEPENDENCIES}
 
-{planning_instruction}
+AUTOSAR ELEMENT CREATION ORDER (Follow this dependency order!):
+1. FILE AND PACKAGES: new_file() or read(), then ARPackages
+2. DATA TYPES (if needed): SwBaseType -> ImplementationDataType
+3. CAN/ETHERNET CLUSTER: Cluster -> Variant -> PhysicalChannel
+4. FRAMES: CanFrame with frameLength
+5. SIGNALS & PDUs: ISignal, ISignalIPdu, mappings
+6. ECU (if needed): EcuInstance
+7. INTERFACES: SenderReceiverInterface with DataElement
+8. SOFTWARE COMPONENTS: ApplicationSwComponentType with ports
+9. BEHAVIOR: InternalBehavior -> Runnable -> TimingEvent
+10. SAVE: autosarfactory.save()
+
+COMPLEXITY DETECTION:
+- If this involves multiple layers (e.g., signal-to-service, full ECU config, SOME/IP), create a DETAILED plan with all subsystems.
+- If this is simple (e.g., just a CAN cluster), keep the plan focused but complete.
 
 PLANNING RULES:
 1. Follow the dependency order above - elements must be created in the right sequence
@@ -182,13 +147,8 @@ PLANNING RULES:
    - Frame lengths/DLC (1-8 bytes for standard CAN)
    - Signal bit lengths and start positions
    - Element names as specified by user
-4. For signal routing between frames, include:
-   - Signal creation
-   - Mapping to source (Rx) PDU
-   - Mapping to destination (Tx) PDU
-   - PDU-to-frame mappings for both frames
-5. Include ARPackage creation for organization
-6. Always end with "Save ARXML file"
+4. Include ARPackage creation for organization
+5. Always end with "Save ARXML file"
 
 Output Format:
 Return ONLY a JSON object with this structure:
@@ -204,23 +164,6 @@ Return ONLY a JSON object with this structure:
 }}
 
 IMPORTANT: Each step should be specific and actionable. Include actual values from the user's requirements.
-
-Example for "CAN cluster with 500kbps and frame 0x123":
-{{
-  "description": "Create CAN cluster with frame",
-  "checklist": [
-    "Step 1: Create ARXML file with root ARPackage 'System'",
-    "Step 2: Create sub-packages: Communication, SystemConfig",
-    "Step 3: Create CanCluster 'HS_CAN'",
-    "Step 4: Create CanClusterVariant 'HS_CAN_Variant'",
-    "Step 5: Configure baudrate to 500000 via CanClusterConfig",
-    "Step 6: Create CanPhysicalChannel 'HS_CAN_Channel'",
-    "Step 7: Create CanFrame with frameLength 8 bytes",
-    "Step 8: Create CanFrameTriggering with identifier 0x123",
-    "Step 9: Link frame to triggering via FrameRef",
-    "Step 10: Save ARXML file"
-  ]
-}}
 
 Now create a detailed plan for the user's requirement:
 """

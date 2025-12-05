@@ -1,5 +1,7 @@
 import json
 from src.utils import get_llm_model
+from src.knowledge_manager import KnowledgeManager
+from src.rag_tps import TPSKnowledgeBase
 
 # AUTOSAR element dependencies - what elements need to be created together
 ELEMENT_DEPENDENCIES = """
@@ -65,14 +67,17 @@ AUTOSAR ELEMENT CREATION ORDER AND DEPENDENCIES:
 class Planner:
     def __init__(self):
         self.model = get_llm_model()
+        self.km = KnowledgeManager()
+        self.tps_kb = None
+        try:
+            self.tps_kb = TPSKnowledgeBase()
+        except Exception as e:
+            print(f"Warning: Could not initialize TPS Knowledge Base: {e}")
 
     def create_plan(self, user_input, edit_context=None):
         """
         Generates a structured checklist plan from user input with API awareness.
-
-        Args:
-            user_input: The user's requirement text
-            edit_context: Optional dict with 'source_file' and 'output_file' for edit mode
+        Uses a DEEP PLANNING strategy for complex requests.
         """
         # Build edit mode section if applicable
         edit_section = ""
@@ -80,18 +85,78 @@ class Planner:
             source_file = edit_context.get('source_file')
             output_file = edit_context.get('output_file', 'output.arxml')
             edit_section = f"""
-
 OPERATION MODE: EDIT EXISTING ARXML
 Source File: {source_file}
 Output File: {output_file}
 
 IMPORTANT EDIT MODE RULES:
-- Use autosarfactory.read("{source_file}") to load the existing file - NOT new_file()!
+- Use autosarfactory.read(["{source_file}"]) to load the existing file - NOT new_file()!
 - Navigate to existing packages using get_ARPackage("PackageName")
 - Add new elements to existing packages where appropriate
 - DO NOT recreate elements that already exist in the file
 - Save with autosarfactory.save() when done
 """
+
+        # Get Domain Knowledge
+        domain_knowledge = self.km.search_domain_knowledge(user_input)
+
+        # Get TPS Context (RAG)
+        tps_context = ""
+        if self.tps_kb:
+            try:
+                tps_context = self.tps_kb.query(user_input)
+                tps_context = f"\nRELEVANT AUTOSAR SPECIFICATION (TPS):\n{tps_context}\n"
+            except Exception as e:
+                print(f"Warning: TPS RAG query failed: {e}")
+
+        # 1. DECOMPOSITION STEP
+        # Break down the request into architectural blocks
+        decomposition_prompt = f"""
+You are an Expert AUTOSAR Architect.
+Analyze the following user requirement and break it down into major architectural blocks.
+User Requirement: "{user_input}"
+
+{domain_knowledge}
+{tps_context}
+
+Identify if this is a "Simple" or "Complex" request.
+- Simple: Just creating a few elements (e.g., "Create a CAN cluster").
+- Complex: Involves multiple layers, signal-to-service mapping, full ECU configuration, or many dependencies.
+
+If Complex, list the major subsystems that need to be built (e.g., "Communication Layer", "Application Layer", "Service Layer", "DataType Definition").
+
+Return a JSON object:
+{{
+  "complexity": "Simple" or "Complex",
+  "blocks": ["Block 1", "Block 2", ...]
+}}
+"""
+        try:
+            resp = self.model.generate_content(decomposition_prompt)
+            decomp = json.loads(self._clean_json(resp.text))
+            complexity = decomp.get("complexity", "Simple")
+        except:
+            complexity = "Simple" # Fallback
+
+        # 2. DETAILED PLANNING STEP
+        # Adjust prompt based on complexity
+        if complexity == "Complex":
+            planning_instruction = """
+THIS IS A COMPLEX REQUEST. YOU MUST GENERATE A "HUGE" AND DETAILED PLAN.
+DO NOT SIMPLIFY. BREAK DOWN EVERY SINGLE ELEMENT.
+
+For "Signal to Service" or similar complex scenarios, you must include:
+1. Service Interface & Service Instance (Provided/Required)
+2. Ethernet/CAN Cluster & Physical Channel
+3. Socket Adaptor / SoAd Config (if Ethernet) or CanTp (if CAN)
+4. PDU Definition (ISignalIPdu) & Mapping to Frame
+5. Signal Definition (ISignal) & Mapping to PDU
+6. SOME/IP Transformation Props (if applicable)
+7. Application Component & Ports
+8. Port-to-Service Mapping
+"""
+        else:
+            planning_instruction = "Generate a standard detailed checklist."
 
         prompt = f"""
 You are an AUTOSAR Architecture Planner with deep knowledge of the autosarfactory library.
@@ -99,8 +164,14 @@ Your goal is to create a precise, step-by-step checklist that will guide code ge
 
 User Requirement:
 "{user_input}"
+
+{domain_knowledge}
+{tps_context}
+
 {edit_section}
 {ELEMENT_DEPENDENCIES}
+
+{planning_instruction}
 
 PLANNING RULES:
 1. Follow the dependency order above - elements must be created in the right sequence
@@ -155,13 +226,17 @@ Now create a detailed plan for the user's requirement:
 """
         response = self.model.generate_content(prompt)
         text = response.text
+        return self._parse_response(text)
 
-        # clean up markdown code blocks
+    def _clean_json(self, text):
         if "```json" in text:
-            text = text.split("```json")[1].split("```")[0]
+            return text.split("```json")[1].split("```")[0]
         elif "```" in text:
-            text = text.split("```")[1].split("```")[0]
+            return text.split("```")[1].split("```")[0]
+        return text
 
+    def _parse_response(self, text):
+        text = self._clean_json(text)
         try:
             return json.loads(text)
         except json.JSONDecodeError:
@@ -170,8 +245,8 @@ Now create a detailed plan for the user's requirement:
                 "checklist": ["Error parsing LLM output", text]
             }
 
-
 if __name__ == "__main__":
     planner = Planner()
-    plan = planner.create_plan("Create a CAN cluster with 500kbps and one message 0x123")
+    # Test with a complex request
+    plan = planner.create_plan("Create a Service Oriented Architecture with a Sensor SWC sending data to a Service via SOME/IP.")
     print(json.dumps(plan, indent=2))

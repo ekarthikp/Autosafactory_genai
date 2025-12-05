@@ -1,6 +1,7 @@
 from src.utils import get_llm_model
 from src.knowledge import inspect_class
 from src.patterns import get_pattern_for_task, get_minimal_example, CRITICAL_API_HINTS
+from src.rag_codebase import CodebaseKnowledgeBase
 
 # Pattern for loading existing ARXML
 EDIT_MODE_PATTERN = '''
@@ -88,9 +89,77 @@ autosarfactory.save()  # Save to original file
 
 
 class Generator:
-    def __init__(self):
+    def __init__(self, enable_deep_thinking=True):
         self.model = get_llm_model()
+        self.enable_deep_thinking = enable_deep_thinking
+        self.last_thinking = None  # Store thinking for debugging
+        self.codebase_kb = None
+        try:
+            self.codebase_kb = CodebaseKnowledgeBase()
+        except Exception as e:
+            print(f"Warning: Could not initialize Codebase Knowledge Base: {e}")
 
+    def _deep_think(self, plan, output_file, is_edit_mode):
+        """
+        Deep thinking phase: Analyze the plan before generating code.
+        
+        Returns:
+            Dictionary with analysis and recommendations
+        """
+        thinking_prompt = f"""
+You are an Expert AUTOSAR Code Analysis AI.
+Before generating the actual code, carefully analyze this plan and provide strategic insights.
+
+PLAN TO ANALYZE:
+{plan['checklist']}
+
+OUTPUT FILE: {output_file}
+MODE: {'EDIT' if is_edit_mode else 'CREATE'}
+
+Your task is to think deeply about potential issues and provide recommendations.
+
+Analyze:
+1. **Dependency Order**: Are the steps in the correct order? What must be created before what?
+2. **Critical Pitfalls**: What are the most common errors for this type of AUTOSAR configuration?
+3. **Reference Patterns**: Which elements will need references to others? How should they be linked?
+4. **Validation Strategy**: How can we verify this configuration is correct?
+5. **Alternative Approaches**: Are there simpler or more robust ways to achieve this?
+
+Return your analysis as a JSON object:
+{{
+  "dependency_warnings": ["Step X should come before Step Y because..."],
+  "critical_pitfalls": ["Watch out for...", "Common mistake is..."],
+  "reference_strategy": {{"Frame to Triggering": "Use direct setter, not new_Ref"}},
+  "validation_checklist": ["Ensure X exists", "Verify Y is linked"],
+  "recommendations": ["Consider...", "Alternatively..."]
+}}
+"""
+        
+        try:
+            response = self.model.generate_content(thinking_prompt)
+            thinking_text = response.text
+            
+            # Clean JSON
+            if "```json" in thinking_text:
+                thinking_text = thinking_text.split("```json")[1].split("```")[0]
+            elif "```" in thinking_text:
+                thinking_text = thinking_text.split("```")[1].split("```")[0]
+            
+            import json
+            thinking = json.loads(thinking_text)
+            self.last_thinking = thinking
+            return thinking
+        except Exception as e:
+            print(f"Warning: Deep thinking failed: {e}")
+            # Return empty thinking if it fails
+            return {
+                "dependency_warnings": [],
+                "critical_pitfalls": [],
+                "reference_strategy": {},
+                "validation_checklist": [],
+                "recommendations": []
+            }
+    
     def generate_code(self, plan, output_file="output.arxml", edit_context=None):
         """
         Generates Python code based on the plan and API knowledge.
@@ -109,27 +178,60 @@ class Generator:
             is_edit_mode = True
             source_file = edit_context.get('source_file')
             output_file = edit_context.get('output_file', output_file)
+        
+        # DEEP THINKING PHASE
+        thinking = None
+        if self.enable_deep_thinking:
+            print("   🧠 Deep thinking about the plan...")
+            thinking = self._deep_think(plan, output_file, is_edit_mode)
 
-        # 1. Extract relevant classes from the plan text
-        relevant_classes = self._identify_classes(plan)
-
-        # 2. Build API context
-        api_context = []
-        # Explicitly add 'new_file' and 'read' since they are critical
-        api_context.append(inspect_class("new_file"))
+        # 1. Identify relevant classes using Knowledge Manager
+        from src.knowledge_manager import KnowledgeManager
+        km = KnowledgeManager()
+        
+        # Search for classes based on plan keywords
+        plan_text = str(plan.get('checklist', '')) + ' ' + str(plan.get('description', ''))
+        
+        # Extract potential keywords from plan
+        # We can use the existing heuristic keywords map to seed the search, 
+        # but then use KM to expand dependencies.
+        initial_classes = self._identify_classes(plan)
+        
+        # Expand dependencies recursively
+        expanded_classes = set(initial_classes)
+        for cls in initial_classes:
+            deps = km.get_dependencies(cls, recursive=True, max_depth=2)
+            expanded_classes.update(deps)
+            
+        # Always include critical classes
+        expanded_classes.add("ARPackage")
         if is_edit_mode:
-            api_context.append(inspect_class("read"))
+            expanded_classes.add("read") # Function
+        else:
+            expanded_classes.add("new_file") # Function
+            
+        # 2. Build API context using Knowledge Manager
+        context_str = km.get_context_for_classes(list(expanded_classes))
 
-        for cls in relevant_classes:
-            info = inspect_class(cls)
-            if "not found" not in info:
-                api_context.append(info)
+        # 2.1 Enhance context with Codebase RAG
+        rag_context = ""
+        if self.codebase_kb:
+            try:
+                rag_query = f"{plan.get('description', '')} {plan_text[:200]}"
+                # Extract step descriptions for better query
+                for step in plan.get('checklist', [])[:5]:
+                    rag_query += f" {step}"
 
-        context_str = "\n\n".join(api_context)
+                rag_results = self.codebase_kb.query(rag_query, n_results=5)
+                rag_context = f"\nADDITIONAL API KNOWLEDGE (RAG):\n{rag_results}\n"
+            except Exception as e:
+                print(f"Warning: Codebase RAG query failed: {e}")
+
+        context_str += rag_context
 
         # 3. Get relevant patterns based on plan content
-        plan_text = str(plan.get('checklist', '')) + ' ' + str(plan.get('description', ''))
         relevant_patterns = get_pattern_for_task(plan_text)
+
 
         # 4. Build mode-specific instructions
         if is_edit_mode:
@@ -168,7 +270,31 @@ OUTPUT FILE: {output_file}
 CREATE MODE: Use autosarfactory.new_file("{output_file}", defaultArPackage="...", overWrite=True)
 """
 
-        # 5. Construct Prompt with patterns and examples
+        # 5. Prepare deep thinking insights
+        thinking_section = ""
+        if thinking and self.enable_deep_thinking:
+            thinking_section = f"""
+DEEP ANALYSIS OF YOUR PLAN:
+Before writing code, I analyzed the plan and found these insights:
+
+DEPENDENCY WARNINGS:
+{chr(10).join('- ' + w for w in thinking.get('dependency_warnings', [])) if thinking.get('dependency_warnings') else '- None'}
+
+CRITICAL PITFALLS TO AVOID:
+{chr(10).join('- ' + p for p in thinking.get('critical_pitfalls', [])) if thinking.get('critical_pitfalls') else '- None'}
+
+REFERENCE STRATEGY:
+{chr(10).join(f'- {k}: {v}' for k, v in thinking.get('reference_strategy', {}).items()) if thinking.get('reference_strategy') else '- Use standard patterns'}
+
+VALIDATION CHECKLIST:
+{chr(10).join('- ' + v for v in thinking.get('validation_checklist', [])) if thinking.get('validation_checklist') else '- Standard verification'}
+
+RECOMMENDATIONS:
+{chr(10).join('- ' + r for r in thinking.get('recommendations', [])) if thinking.get('recommendations') else '- Follow standard approach'}
+
+"""
+        
+        # 6. Construct Prompt with patterns and examples
         prompt = f"""
 You are an Expert AUTOSAR Code Generator.
 You must write a complete, executable Python script using the 'autosarfactory' library.
@@ -179,6 +305,7 @@ Implement the following plan.
 PLAN:
 {plan['checklist']}
 
+{thinking_section}
 {CRITICAL_API_HINTS}
 
 WORKING CODE PATTERNS (USE THESE AS REFERENCE):
@@ -235,7 +362,24 @@ CRITICAL INSTRUCTIONS:
    - Implement all steps in the plan
    - End with: `autosarfactory.save()`
 
-10. Return ONLY the Python code. No markdown formatting if possible, or wrap in ```python.
+10. ERROR HANDLING (CRITICAL):
+    - Wrap the entire main() execution in a try-except block.
+    - In the except block, write the traceback to a file named 'execution_error.log'.
+    - Print "Execution failed. See execution_error.log for details."
+    - Re-raise the exception.
+
+    Example:
+    if __name__ == "__main__":
+        try:
+            main()
+        except Exception as e:
+            import traceback
+            with open("execution_error.log", "w") as f:
+                f.write(traceback.format_exc())
+            print("Execution failed. See execution_error.log for details.")
+            raise e
+
+11. Return ONLY the Python code. No markdown formatting if possible, or wrap in ```python.
 
 GENERATE THE COMPLETE PYTHON SCRIPT:
 """
@@ -344,10 +488,18 @@ GENERATE THE COMPLETE PYTHON SCRIPT:
             # References (often needed)
             "reference": ["FrameRef", "PduRef", "ISignalRef", "BaseTypeRef",
                          "TypeRef", "RequiredInterfaceRef", "ProvidedInterfaceRef"],
+
+            # Signal to Service Translation
+            "translation": ["SignalServiceTranslationProps", "SignalServiceTranslationEventProps", "SignalServiceTranslationControlEnum"],
+            "props": ["SignalServiceTranslationProps", "SignalServiceTranslationEventProps"],
         }
 
         for key, cls_list in keywords.items():
             if key in text:
                 classes.extend(cls_list)
-
+                
+        # Use Knowledge Manager for fuzzy search on the whole text words
+        # This is expensive if we search every word, so let's just stick to the keywords for now
+        # but we can use the KM to validate existence.
+        
         return list(set(classes))

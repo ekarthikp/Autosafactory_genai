@@ -25,8 +25,54 @@ from src.utils import (
 )
 
 
+@st.cache_resource
+def init_rag_system():
+    """
+    Initialize RAG Knowledge Bases.
+    Cached resource to run only once per session.
+    """
+    try:
+        print("Initializing RAG System...")
+        from src.rag_tps import TPSKnowledgeBase
+        from src.rag_codebase import CodebaseKnowledgeBase
+        # Force initialization/ingestion
+        TPSKnowledgeBase()
+        CodebaseKnowledgeBase()
+        print("RAG System Initialized.")
+        return True
+    except Exception as e:
+        print(f"Failed to init RAG: {e}")
+        return False
+
+def check_rag_status():
+    """
+    Updates session state based on cached init status.
+    """
+    if init_rag_system():
+        st.session_state.rag_initialized = True
+
 def init_session_state():
     """Initialize all session state variables."""
+    # Initialize Knowledge Manager
+    from src.knowledge_manager import KnowledgeManager
+    import os
+    
+    # Check if knowledge graph exists, if not, generate it
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    kb_path = os.path.join(base_dir, "src", "knowledge_graph.json")
+    if not os.path.exists(kb_path):
+        st.info("Generating knowledge base... This may take a minute.")
+        try:
+            from src.build_knowledge_base import build_knowledge_graph, save_knowledge_base
+            kb = build_knowledge_graph()
+            save_knowledge_base(kb, kb_path)
+            st.success("Knowledge base generated!")
+        except Exception as e:
+            st.error(f"Failed to generate knowledge base: {e}")
+
+    # Pre-load KM
+    KnowledgeManager()
+
     if "messages" not in st.session_state:
         st.session_state.messages = []
     if "current_plan" not in st.session_state:
@@ -39,6 +85,10 @@ def init_session_state():
         st.session_state.selected_provider = None
     if "selected_model" not in st.session_state:
         st.session_state.selected_model = None
+    if "rag_initialized" not in st.session_state:
+        st.session_state.rag_initialized = False
+        # Trigger background initialization
+        check_rag_status()
     # Edit mode state
     if "edit_mode" not in st.session_state:
         st.session_state.edit_mode = False
@@ -48,6 +98,11 @@ def init_session_state():
         st.session_state.source_file_content = None
     if "output_file_name" not in st.session_state:
         st.session_state.output_file_name = "output.arxml"
+    # Deep thinking and error fixing configuration
+    if "enable_deep_thinking" not in st.session_state:
+        st.session_state.enable_deep_thinking = True
+    if "max_fix_attempts" not in st.session_state:
+        st.session_state.max_fix_attempts = 5
 
 
 def render_provider_selector():
@@ -203,6 +258,55 @@ def main():
             )
 
         st.divider()
+        
+        # Configuration Section
+        st.header("⚙️ Configuration")
+        
+        # Deep Thinking Toggle
+        st.session_state.enable_deep_thinking = st.checkbox(
+            "🧠 Enable Deep Thinking",
+            value=st.session_state.get('enable_deep_thinking', True),
+            help="Analyze the plan before generating code (adds 10-20s)"
+        )
+        
+        # Max Fix Attempts Slider
+        st.session_state.max_fix_attempts = st.slider(
+            "Max Fix Attempts",
+            min_value=1,
+            max_value=10,
+            value=st.session_state.get('max_fix_attempts', 5),
+            help="Maximum number of times to attempt fixing errors"
+        )
+        
+        st.divider()
+        
+        # Error Statistics Section
+        st.header("📊 Error Statistics")
+        try:
+            from src.error_feedback_manager import get_error_feedback_manager
+            efm = get_error_feedback_manager()
+            stats = efm.get_statistics()
+            
+            st.metric("Total Errors", stats.get('total_errors', 0))
+            st.metric("Fix Success Rate", f"{stats.get('success_rate', 0)}%")
+            
+            with st.expander("View Details"):
+                st.json(stats)
+        except Exception as e:
+            st.caption(f"Error stats not available: {e}")
+
+        st.divider()
+
+        # RAG Status
+        st.header("🧠 Knowledge Base")
+        if st.session_state.rag_initialized:
+             st.success("✅ RAG System Active")
+             st.caption("TPS + Codebase Context Loaded")
+        else:
+             st.warning("⏳ Initializing RAG System...")
+             st.caption("First run may take a minute to ingest data.")
+
+        st.divider()
 
         # Reset button
         if st.button("🔄 Reset State"):
@@ -292,7 +396,9 @@ def run_generation_pipeline(provider=None, model=None):
     with status_container:
         st.info(f"Generating Python Code{model_info}...")
 
-    generator = Generator()
+    # Get deep thinking setting
+    enable_deep_thinking = st.session_state.get('enable_deep_thinking', True)
+    generator = Generator(enable_deep_thinking=enable_deep_thinking)
 
     # Pass edit mode context to generator
     edit_context = None
@@ -310,18 +416,62 @@ def run_generation_pipeline(provider=None, model=None):
         st.info("Executing & Verifying...")
 
     executor = Executor()
-    fixer = Fixer()
+    
+    # Get configuration from session state
+    # Dynamic retry calculation
+    base_retries = st.session_state.get('max_fix_attempts', 5)
+    
+    # Calculate retries proportional to plan complexity (approx 1 retry per 2 steps, min base_retries)
+    # Calculate retries proportional to plan complexity (approx 1 retry per 2 steps, min base_retries)
+    checklist = plan.get('checklist', [])
+    if isinstance(checklist, list):
+        plan_steps = len(checklist)
+    else:
+        plan_steps = len(str(checklist).split('\n'))
+        
+    dynamic_retries = max(base_retries, int(plan_steps / 2))
+    
+    max_retries = dynamic_retries
+    enable_deep_thinking = st.session_state.get('enable_deep_thinking', True)
+    
+    # Initialize fixer with configuration
+    fixer = Fixer(max_attempts=max_retries, enable_deep_analysis=enable_deep_thinking)
+    
+    # Initialize error feedback manager
+    from src.error_feedback_manager import get_error_feedback_manager
+    from datetime import datetime
+    efm = get_error_feedback_manager()
+
 
     success = False
-    max_retries = 10
 
+    log_container.write(f"Configuration: Max Retries = {max_retries}, Deep Thinking = {enable_deep_thinking}")
+
+    consecutive_unchanged = 0
+    
     for attempt in range(max_retries + 1):
         log_container.write(f"--- Attempt {attempt + 1} ---")
 
         # Run
         run_success, run_msg = executor.run_script(code)
         if not run_success:
-            log_container.write(f"❌ Runtime Error: {run_msg[:200]}...")
+            # run_msg is now a dict with error info
+            error_display = run_msg.get('message', str(run_msg)) if isinstance(run_msg, dict) else str(run_msg)
+            log_container.write(f"❌ Runtime Error: {error_display[:200]}...")
+            
+            # Record error to feedback system
+            efm.record_error({
+                "timestamp": datetime.now().isoformat(),
+                "error_type": run_msg.get('type', 'Unknown') if isinstance(run_msg, dict) else 'Unknown',
+                "error_message": run_msg.get('message', str(run_msg)) if isinstance(run_msg, dict) else str(run_msg),
+                "error_line": run_msg.get('line') if isinstance(run_msg, dict) else None,
+                "code_snippet": code[:500],  # First 500 chars
+                "plan_context": plan.get('description', ''),
+                "fix_attempt_number": attempt + 1,
+                "fix_applied": None,  # Will update after fix
+                "fix_successful": False,
+                "traceback": run_msg.get('traceback', str(run_msg)) if isinstance(run_msg, dict) else str(run_msg)
+            })
         else:
             log_container.write("✅ Script Executed")
             # Verify
@@ -338,11 +488,39 @@ def run_generation_pipeline(provider=None, model=None):
         # Fix
         if attempt < max_retries:
             with status_container:
-                st.warning(f"Fixing Code (Attempt {attempt + 1}){model_info}...")
-            code = fixer.fix_code(code, run_msg, plan)
+                st.warning(f"Fixing Code (Attempt {attempt + 1}/{max_retries}){model_info}...")
+            
+            log_container.write(f"🔧 Calling Fixer (Attempt {attempt + 1})...")
+            fixed_code = fixer.fix_code(code, run_msg, plan)
+            
+            if fixed_code == code:
+                consecutive_unchanged += 1
+                log_container.write(f"⚠️ Fixer returned same code (Attempt {consecutive_unchanged}/5 unchanged). Retrying...")
+                
+                if consecutive_unchanged >= 5:
+                     log_container.write("🛑 Stopping: Code unchanged for 5 consecutive attempts. The fixer is stuck.")
+                     break
+            else:
+                log_container.write("✅ Fixer applied changes. Continuing...")
+                consecutive_unchanged = 0
+            
+            # Check if fix was actually attempted (not max attempts reached)
+            if fixed_code != code:
+                # Update last error record with fix info
+                if efm.feedback_data["errors"]:
+                    efm.feedback_data["errors"][-1]["fix_applied"] = "LLM fix attempted"
+                    efm.save_feedback()
+            
+            code = fixed_code
             st.session_state.generated_code = code
 
     if success:
+        # Record successful generation
+        if efm.feedback_data["errors"] and len(efm.feedback_data["errors"]) > 0:
+            # Mark last error as fixed
+            efm.feedback_data["errors"][-1]["fix_successful"] = True
+            efm.save_feedback()
+        
         with status_container:
             if st.session_state.edit_mode:
                 st.success(f"SUCCESS! ARXML Modified: {output_file}")
@@ -372,8 +550,32 @@ def run_generation_pipeline(provider=None, model=None):
         with st.expander("View Generated Code"):
             st.code(code, language="python")
     else:
+        # FAILURE - show detailed info
         with status_container:
-            st.error("Failed to generate valid ARXML after retries.")
+            st.error(f"⚠️ Failed to generate valid ARXML after {max_retries} attempts.")
+        
+        # Show error statistics
+        st.warning(f"**Last Error:**")
+        if isinstance(run_msg, dict):
+            st.code(f"Type: {run_msg.get('type', 'Unknown')}\nMessage: {run_msg.get('message', 'N/A')}\nLine: {run_msg.get('line', 'N/A')}", language="text")
+        else:
+            st.code(str(run_msg)[:500], language="text")
+        
+        # Show generated code for debugging
+        with st.expander("🔍 View Last Generated Code (for debugging)", expanded=True):
+            st.code(code, language="python")
+        
+        # Download button for problematic code
+        st.sidebar.download_button(
+            "📥 Download Failed Script",
+            code,
+            "failed_script.py",
+            "text/x-python",
+            help="Download the script that failed for manual debugging"
+        )
+        
+        # Show error feedback stats
+        st.info("💡 **Tip:** Check the Error Statistics in the sidebar to see if similar errors have occurred before.")
 
 
 if __name__ == "__main__":

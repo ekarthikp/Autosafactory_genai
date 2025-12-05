@@ -59,6 +59,8 @@ def init_session_state():
         st.session_state.selected_provider = None
     if "selected_model" not in st.session_state:
         st.session_state.selected_model = None
+    if "rag_initialized" not in st.session_state:
+        st.session_state.rag_initialized = False
     # Edit mode state
     if "edit_mode" not in st.session_state:
         st.session_state.edit_mode = False
@@ -264,6 +266,29 @@ def main():
                 st.json(stats)
         except Exception as e:
             st.caption(f"Error stats not available: {e}")
+
+        st.divider()
+
+        # RAG Status
+        st.header("🧠 Knowledge Base")
+        if not st.session_state.rag_initialized:
+            if st.button("Initialize RAG System"):
+                with st.spinner("Initializing RAG Knowledge Bases... This may take a minute."):
+                    try:
+                        from src.rag_tps import TPSKnowledgeBase
+                        from src.rag_codebase import CodebaseKnowledgeBase
+                        # Force initialization
+                        TPSKnowledgeBase()
+                        CodebaseKnowledgeBase()
+                        st.session_state.rag_initialized = True
+                        st.success("RAG System Initialized!")
+                    except Exception as e:
+                        st.error(f"Failed to init RAG: {e}")
+        else:
+            st.success("✅ RAG System Active")
+            if st.button("Re-Index Knowledge"):
+                st.session_state.rag_initialized = False
+                st.rerun()
 
         st.divider()
 

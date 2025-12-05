@@ -3,4 +3,5 @@ test_schema_validation.py
 .env
 *.arxml
 test*
-
+tps_knowledge_db/
+codebase_knowledge_db/

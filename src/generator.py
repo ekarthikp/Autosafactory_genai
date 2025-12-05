@@ -1,6 +1,7 @@
 from src.utils import get_llm_model
 from src.knowledge import inspect_class
 from src.patterns import get_pattern_for_task, get_minimal_example, CRITICAL_API_HINTS
+from src.rag_codebase import CodebaseKnowledgeBase
 
 # Pattern for loading existing ARXML
 EDIT_MODE_PATTERN = '''
@@ -92,6 +93,11 @@ class Generator:
         self.model = get_llm_model()
         self.enable_deep_thinking = enable_deep_thinking
         self.last_thinking = None  # Store thinking for debugging
+        self.codebase_kb = None
+        try:
+            self.codebase_kb = CodebaseKnowledgeBase()
+        except Exception as e:
+            print(f"Warning: Could not initialize Codebase Knowledge Base: {e}")
 
     def _deep_think(self, plan, output_file, is_edit_mode):
         """
@@ -206,6 +212,22 @@ Return your analysis as a JSON object:
             
         # 2. Build API context using Knowledge Manager
         context_str = km.get_context_for_classes(list(expanded_classes))
+
+        # 2.1 Enhance context with Codebase RAG
+        rag_context = ""
+        if self.codebase_kb:
+            try:
+                rag_query = f"{plan.get('description', '')} {plan_text[:200]}"
+                # Extract step descriptions for better query
+                for step in plan.get('checklist', [])[:5]:
+                    rag_query += f" {step}"
+
+                rag_results = self.codebase_kb.query(rag_query, n_results=5)
+                rag_context = f"\nADDITIONAL API KNOWLEDGE (RAG):\n{rag_results}\n"
+            except Exception as e:
+                print(f"Warning: Codebase RAG query failed: {e}")
+
+        context_str += rag_context
 
         # 3. Get relevant patterns based on plan content
         relevant_patterns = get_pattern_for_task(plan_text)

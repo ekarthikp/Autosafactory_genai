@@ -15,7 +15,12 @@ def get_inheritance_chain(cls):
     """
     if cls is None:
         return []
-    return [c.__name__ for c in cls.__mro__ if c.__module__.startswith('autosarfactory')]
+    if not hasattr(cls, '__mro__'):
+        return []
+    try:
+        return [c.__name__ for c in cls.__mro__ if hasattr(c, '__module__') and c.__module__ and c.__module__.startswith('autosarfactory')]
+    except:
+        return []
 
 def get_methods(cls):
     """

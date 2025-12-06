@@ -192,15 +192,194 @@ def render_provider_selector():
     return None, None
 
 
+def inject_custom_css():
+    """Inject custom CSS for modern dark theme with gradient accents."""
+    st.markdown("""
+    <style>
+    /* Modern Dark Theme with Gradient Accents */
+    :root {
+        --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        --accent-color: #667eea;
+        --accent-hover: #764ba2;
+        --success-color: #10b981;
+        --warning-color: #f59e0b;
+        --error-color: #ef4444;
+    }
+    
+    /* Main container styling */
+    .stApp {
+        background: linear-gradient(180deg, #0f0f1a 0%, #1a1a2e 50%, #16213e 100%);
+    }
+    
+    /* Sidebar styling with glassmorphism */
+    [data-testid="stSidebar"] {
+        background: rgba(26, 26, 46, 0.95);
+        backdrop-filter: blur(10px);
+        border-right: 1px solid rgba(102, 126, 234, 0.2);
+    }
+    
+    [data-testid="stSidebar"] .stButton > button {
+        background: var(--primary-gradient);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        padding: 0.75rem 1.5rem;
+        font-weight: 600;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+    }
+    
+    [data-testid="stSidebar"] .stButton > button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+    }
+    
+    /* Headers with gradient text */
+    h1, h2, h3 {
+        background: var(--primary-gradient);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+    
+    /* Chat input styling */
+    [data-testid="stChatInput"] textarea {
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(102, 126, 234, 0.3);
+        border-radius: 12px;
+        color: white;
+    }
+    
+    [data-testid="stChatInput"] textarea:focus {
+        border-color: var(--accent-color);
+        box-shadow: 0 0 15px rgba(102, 126, 234, 0.2);
+    }
+    
+    /* Chat message containers */
+    [data-testid="stChatMessage"] {
+        background: rgba(255, 255, 255, 0.03);
+        border-radius: 12px;
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        padding: 1rem;
+        margin: 0.5rem 0;
+    }
+    
+    /* Success/Error message styling */
+    .stSuccess {
+        background: rgba(16, 185, 129, 0.1);
+        border-left: 4px solid var(--success-color);
+        border-radius: 8px;
+    }
+    
+    .stError {
+        background: rgba(239, 68, 68, 0.1);
+        border-left: 4px solid var(--error-color);
+        border-radius: 8px;
+    }
+    
+    .stWarning {
+        background: rgba(245, 158, 11, 0.1);
+        border-left: 4px solid var(--warning-color);
+        border-radius: 8px;
+    }
+    
+    /* Expander styling */
+    .streamlit-expanderHeader {
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 8px;
+        border: 1px solid rgba(102, 126, 234, 0.2);
+    }
+    
+    /* Metric cards */
+    [data-testid="stMetric"] {
+        background: rgba(255, 255, 255, 0.03);
+        padding: 1rem;
+        border-radius: 12px;
+        border: 1px solid rgba(102, 126, 234, 0.2);
+    }
+    
+    [data-testid="stMetricValue"] {
+        color: var(--accent-color) !important;
+    }
+    
+    /* Download buttons */
+    .stDownloadButton > button {
+        background: transparent;
+        border: 2px solid var(--accent-color);
+        color: var(--accent-color);
+        border-radius: 8px;
+        transition: all 0.3s ease;
+    }
+    
+    .stDownloadButton > button:hover {
+        background: var(--primary-gradient);
+        border-color: transparent;
+        color: white;
+    }
+    
+    /* Selectbox styling */
+    [data-testid="stSelectbox"] > div > div {
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 8px;
+    }
+    
+    /* Slider styling */
+    .stSlider > div > div > div {
+        background: var(--primary-gradient);
+    }
+    
+    /* Quick start button container */
+    .quick-start-btn {
+        display: inline-block;
+        margin: 4px;
+    }
+    
+    /* Animated progress indicator */
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+    }
+    
+    .stSpinner > div {
+        animation: pulse 1.5s ease-in-out infinite;
+    }
+    
+    /* Code block styling */
+    .stCodeBlock {
+        border-radius: 12px;
+        border: 1px solid rgba(102, 126, 234, 0.2);
+    }
+    
+    /* Divider styling */
+    hr {
+        border-color: rgba(102, 126, 234, 0.2);
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+
+# Quick-start templates for common AUTOSAR patterns
+QUICK_START_TEMPLATES = {
+    "🚗 CAN Network": "Create a CAN cluster named 'VehicleCAN' with 500kbps baudrate, a physical channel, a frame with ID 0x100, and a signal named 'VehicleSpeed' (16 bits).",
+    "🌐 Ethernet Network": "Create an Ethernet cluster with a VLAN, a physical channel, and a SOME/IP service interface for vehicle diagnostics.",
+    "📦 Software Component": "Create an ApplicationSwComponentType with a sender-receiver port, an internal behavior with a runnable triggered every 100ms.",
+    "🔗 Signal Routing": "Create a gateway that routes signals from CAN frame 0x100 to CAN frame 0x200.",
+}
+
+
 def main():
     st.set_page_config(
         page_title="AUTOSAR Agent (Multi-Model)",
         page_icon="🚗",
-        layout="wide"
+        layout="wide",
+        initial_sidebar_state="expanded"
     )
+    
+    # Inject custom CSS
+    inject_custom_css()
 
     st.title("🚗 AUTOSAR Architecture Agent")
-    st.caption("Plan -> Approve -> Generate -> Verify | Multi-Model Support")
+    st.caption("Plan → Approve → Generate → Verify | AI-Powered ARXML Generation")
 
     # Initialize session state
     init_session_state()
@@ -322,6 +501,36 @@ def main():
             st.session_state.source_file_content = None
             st.session_state.output_file_name = "output.arxml"
             st.rerun()
+
+    # Quick Start Templates (shown when no messages)
+    if not st.session_state.messages:
+        st.markdown("### 🚀 Quick Start")
+        st.markdown("Click a template to get started, or type your own requirement below:")
+        
+        cols = st.columns(len(QUICK_START_TEMPLATES))
+        for i, (label, template) in enumerate(QUICK_START_TEMPLATES.items()):
+            with cols[i]:
+                if st.button(label, key=f"template_{i}", use_container_width=True):
+                    st.session_state.messages.append({"role": "user", "content": template})
+                    st.session_state.quick_start_triggered = True
+                    st.rerun()
+        
+        st.divider()
+        
+        # Help section
+        with st.expander("💡 Tips & Examples"):
+            st.markdown("""
+            **How to use this tool:**
+            1. Describe your AUTOSAR requirement in natural language
+            2. Review the generated plan
+            3. Click "Generate Code" to create the ARXML
+            4. Download the output file
+            
+            **Example requests:**
+            - "Create a CAN bus with 2 frames and signals for speed and RPM"
+            - "Add an Ethernet cluster with SOME/IP service for diagnostics"
+            - "Create a software component with timing events every 10ms"
+            """)
 
     # Chat Interface
     for msg in st.session_state.messages:

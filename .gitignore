@@ -1,7 +1,35 @@
+# Python
 __pycache__/
-test_schema_validation.py
+*.pyc
+*.pyo
 .env
+.venv/
+
+# Generated outputs
 *.arxml
+generated_script.py
+
+# Log files
+*.log
+error_log.txt
+execution_error.log
+
+# Debug/test files
 test*
+debug_*.py
+discover_*.py
+dump_*.py
+verify_*.py
+simple_*.py
+class_dump.txt
+*_output.txt
+*_result.txt
+
+# Knowledge bases (generated)
 tps_knowledge_db/
 codebase_knowledge_db/
+knowledge_base.pkl
+
+# IDE
+.vscode/
+.idea/

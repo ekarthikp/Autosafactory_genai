@@ -2,6 +2,12 @@
 AUTOSAR Architecture Agent - CLI
 =================================
 Command-line interface for ARXML generation with multi-model support.
+
+Uses the Neuro-Symbolic Architecture for near-deterministic code generation:
+- Ground Truth from Symbol Table (prevents API hallucination)
+- Constrained Selection (forces valid method choices)
+- Pre-Generation Validation (catches errors before execution)
+- Reflexion Loop (automatic self-correction)
 """
 
 import sys
@@ -10,7 +16,6 @@ import argparse
 import time
 import os
 from src.planner import Planner
-from src.generator import Generator
 from src.executor import Executor
 from src.fixer import Fixer
 from src.utils import (
@@ -20,6 +25,15 @@ from src.utils import (
     list_available_models,
     SUPPORTED_PROVIDERS
 )
+
+# Import neuro-symbolic generator
+try:
+    from src.neuro_generator import get_hybrid_generator, HybridGenerator
+    NEURO_SYMBOLIC_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Neuro-symbolic generator not available: {e}")
+    NEURO_SYMBOLIC_AVAILABLE = False
+    from src.generator import Generator
 
 
 def parse_args():
@@ -95,6 +109,18 @@ Examples:
         "--edit", "-e",
         metavar="FILE",
         help="Edit an existing ARXML file (add/modify elements)"
+    )
+
+    parser.add_argument(
+        "--legacy",
+        action="store_true",
+        help="Use legacy generator instead of neuro-symbolic"
+    )
+
+    parser.add_argument(
+        "--no-reflexion",
+        action="store_true",
+        help="Disable LLM-based reflexion loop (only use deterministic fixes)"
     )
 
     return parser.parse_args()
@@ -221,10 +247,44 @@ def main():
     output_file = args.output
 
     print("\n[2/3] Generating Code...")
-    generator = Generator()
-    code = generator.generate_code(plan, output_file=output_file, edit_context=edit_context)
 
-    # 6. Execution & Verification Phase
+    # Use neuro-symbolic generator unless --legacy flag is set
+    use_neuro_symbolic = NEURO_SYMBOLIC_AVAILABLE and not args.legacy
+
+    if use_neuro_symbolic:
+        print("   Using Neuro-Symbolic Generator (near-deterministic)")
+        generator = get_hybrid_generator()
+        try:
+            code = generator.generate_code(plan, output_file=output_file, edit_context=edit_context)
+        except Exception as e:
+            print(f"   ⚠️ Neuro-symbolic generation failed: {e}")
+            print("   Falling back to legacy generator...")
+            from src.generator import Generator
+            legacy_gen = Generator()
+            code = legacy_gen.generate_code(plan, output_file=output_file, edit_context=edit_context)
+    else:
+        print("   Using Legacy Generator")
+        from src.generator import Generator
+        generator = Generator()
+        code = generator.generate_code(plan, output_file=output_file, edit_context=edit_context)
+
+    # 6. Pre-Execution Validation (Neuro-Symbolic)
+    if use_neuro_symbolic:
+        print("\n   Applying pre-execution validation...")
+        try:
+            from src.validation_engine import get_validation_pipeline
+            pipeline = get_validation_pipeline()
+            code, fixes = pipeline.quick_fix(code)
+            if fixes:
+                print(f"   Applied {len(fixes)} deterministic fixes")
+                for fix in fixes[:5]:
+                    print(f"      - {fix}")
+                if len(fixes) > 5:
+                    print(f"      ... and {len(fixes) - 5} more")
+        except Exception as e:
+            print(f"   Warning: Pre-execution validation failed: {e}")
+
+    # 7. Execution & Verification Phase
     print("\n[3/3] Executing & Verifying...")
     executor = Executor()
     fixer = Fixer()

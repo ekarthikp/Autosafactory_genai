@@ -22,7 +22,7 @@ from enum import Enum, auto
 from src.knowledge_base import (
     get_knowledge_base,
     UnifiedKnowledgeBase,
-    ValidationError,
+    ValidationError as KBValidationError,
     HALLUCINATION_FIXES
 )
 

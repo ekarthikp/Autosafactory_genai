@@ -124,7 +124,7 @@ HALLUCINATION_FIXES: Dict[str, str] = {
     'new_SwcInternalBehavior': 'new_InternalBehavior',
     'new_RunnableEntity': 'new_Runnable',
 
-    # Data access (note the spelling)
+    # Data access (note the spelling - one 's')
     'new_DataReadAccess': 'new_DataReadAcces',
     'new_DataWriteAccess': 'new_DataWriteAcces',
 
@@ -145,8 +145,9 @@ HALLUCINATION_FIXES: Dict[str, str] = {
     'new_SwcToEcuMapping': 'new_SwMapping',
     'new_SoftwareComponentToEcuMapping': 'new_SwMapping',
 
-    # Reference setters
-    'set_targetDataPrototype': 'set_targetDataElement',
+    # Reference setters - REMOVED set_targetDataPrototype as it's valid on AutosarVariable
+    # set_targetDataPrototype is VALID on AutosarVariable (AccessedVariable context)
+    # set_targetDataElement is VALID on Data (DataReceivedEvent context)
     'set_variableDataPrototype': 'set_targetDataPrototype',
     'set_communicationCluster': 'set_commController',
 

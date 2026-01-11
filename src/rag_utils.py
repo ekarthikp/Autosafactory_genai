@@ -1,7 +1,43 @@
 import os
-from langchain_huggingface import HuggingFaceEmbeddings
+# Disable tokenizer parallelism to prevent thread panics
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+
 from chromadb.config import Settings
 import chromadb
+
+# Try multiple embedding backends with graceful fallback
+HUGGINGFACE_EMBEDDINGS_AVAILABLE = False
+HuggingFaceEmbeddings = None
+
+try:
+    from langchain_huggingface import HuggingFaceEmbeddings
+    HUGGINGFACE_EMBEDDINGS_AVAILABLE = True
+except ImportError:
+    try:
+        from langchain_community.embeddings import HuggingFaceEmbeddings
+        HUGGINGFACE_EMBEDDINGS_AVAILABLE = True
+    except ImportError:
+        pass
+
+# If langchain not available, create a simple fallback using sentence_transformers
+if not HUGGINGFACE_EMBEDDINGS_AVAILABLE:
+    try:
+        from sentence_transformers import SentenceTransformer
+        
+        class HuggingFaceEmbeddings:
+            """Fallback embeddings using sentence_transformers directly."""
+            def __init__(self, model_name="all-MiniLM-L6-v2"):
+                self.model = SentenceTransformer(model_name)
+            
+            def embed_documents(self, texts):
+                return self.model.encode(texts).tolist()
+            
+            def embed_query(self, text):
+                return self.model.encode(text).tolist()
+        
+        HUGGINGFACE_EMBEDDINGS_AVAILABLE = True
+    except ImportError:
+        print("Warning: No embedding libraries available. Install sentence-transformers or langchain-huggingface.")
 
 # Constants
 TPS_DB_PATH = "tps_knowledge_db"

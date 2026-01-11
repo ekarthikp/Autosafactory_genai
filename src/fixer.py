@@ -1,8 +1,31 @@
 import re
+import ast
+from typing import Tuple, List, Dict, Optional
+from dataclasses import dataclass
 from src.utils import get_llm_model
 from src.knowledge import inspect_class
 from src.patterns import CRITICAL_API_HINTS, get_minimal_example
 from src.knowledge_manager import KnowledgeManager
+
+# Import new components for symbol validation
+try:
+    from src.ast_indexer import get_symbol_table, SymbolTable
+    from src.code_graph import get_code_graph, CodeKnowledgeGraph
+    from src.constrained_generator import get_constrained_generator
+    SYMBOL_VALIDATION_AVAILABLE = True
+except ImportError:
+    SYMBOL_VALIDATION_AVAILABLE = False
+
+
+@dataclass
+class SymbolError:
+    """Represents a hallucinated or invalid symbol."""
+    symbol_name: str
+    error_type: str  # 'method', 'class', 'attribute'
+    context: str  # Where in the code it was found
+    line_number: Optional[int] = None
+    suggestion: Optional[str] = None
+
 
 class Fixer:
     def __init__(self, max_attempts=5, enable_deep_analysis=True):
@@ -11,6 +34,18 @@ class Fixer:
         self.fix_attempts = 0
         self.max_attempts = max_attempts
         self.enable_deep_analysis = enable_deep_analysis
+        
+        # Initialize symbol validation components
+        self.symbol_table: Optional[SymbolTable] = None
+        self.code_graph: Optional[CodeKnowledgeGraph] = None
+        
+        if SYMBOL_VALIDATION_AVAILABLE:
+            try:
+                self.symbol_table = get_symbol_table()
+                self.code_graph = get_code_graph()
+                print("Fixer: Symbol validation enabled")
+            except Exception as e:
+                print(f"Fixer: Symbol validation disabled ({e})")
 
     def _extract_error_line(self, error_log):
         """Extract the line number from the error traceback."""
@@ -313,4 +348,289 @@ FIXED PYTHON SCRIPT:
                 return fixed
         
         return code
+    
+    def _apply_proactive_fixes(self, code: str) -> str:
+        """
+        Apply all known hallucination pattern fixes proactively.
+        This runs BEFORE AST validation to fix common LLM mistakes.
+        """
+        import re
+        
+        # Known hallucinated methods -> correct methods
+        method_fixes = {
+            # Behavior methods
+            'new_SwcInternalBehavior': 'new_InternalBehavior',
+            'new_RunnableEntity': 'new_Runnable',
+            # Access methods (note the spelling without 's')
+            'new_DataReadAccess': 'new_DataReadAcces',
+            'new_DataWriteAccess': 'new_DataWriteAcces',
+            # Data elements
+            'new_VariableDataPrototype': 'new_DataElement',
+            # Events
+            'new_ServiceEvent': 'new_Event',
+            # IPdu (Common hallucination)
+            'new_IPdu': 'new_ISignalIPdu',
+            # Import errors
+            'from Autosarfactory import': 'from autosarfactory import',
+            'import Autosarfactory': 'import autosarfactory',
+            # Components
+            'new_SwComponentPrototype': 'new_Component',
+            'new_ComponentPrototype': 'new_Component',
+            # SOME/IP (lowercase 'p')
+            'new_SomeIpServiceInterfaceDeployment': 'new_SomeipServiceInterfaceDeployment',
+            'new_SomeIpEventDeployment': 'new_SomeipEventDeployment',
+            'new_SomeIpMethodDeployment': 'new_SomeipMethodDeployment',
+            'new_SomeIpFieldDeployment': 'new_SomeipFieldDeployment',
+            'new_SomeIpClientServerInterfaceDeployment': 'new_SomeipServiceInterfaceDeployment',
+            # Common CAN mistakes
+            'new_CanCommunicationController': 'new_CommunicationController',
+            'new_CanFramePort': 'new_FramePort',
+            'new_CanFrameTriggering': 'new_CanFrameTriggering',  # This is correct, but check context
+            # Timing
+            'new_TimerEvent': 'new_TimingEvent',
+            # Ports
+            'new_ReceiverPort': 'new_RPortPrototype',
+            'new_ProviderPort': 'new_PPortPrototype',
+            'new_RequiredPort': 'new_RPortPrototype',
+            'new_ProvidedPort': 'new_PPortPrototype',
+            # Interfaces
+            'new_SenderReceiverInterfaceRef': 'set_providedInterface',  # Pattern fix
+            'new_DataTypeMappingSet': 'new_DataTypeMappingSet',  # Verify exists
+            # ECU Mapping (CRITICAL - new_SwcToEcuMapping doesn't exist!)
+            'new_SwcToEcuMapping': 'new_SwMapping',  # Returns SwcToEcuMapping!
+            'new_SoftwareComponentToEcuMapping': 'new_SwMapping',
+            # Variable/Data prototype references (COMMON MISTAKE!)
+            # NOTE: Different classes have different methods:
+            # - VariableInAtomicSWCTypeInstanceRef uses set_targetDataPrototype
+            # - RVariableInAtomicSwcInstanceRef uses set_targetDataElement  
+            # Only fix the clearly wrong ones:
+            'set_variableDataPrototype': 'set_targetDataPrototype',  # Most common case
+            'set_dataPrototype': 'set_targetDataPrototype',
+            'set_variablePrototype': 'set_targetDataPrototype',
+            # Port references
+            'set_port': 'set_portPrototype',
+            # Type references
+            'set_typeRef': 'set_type',
+            'set_dataType': 'set_type',
+            'set_implementationType': 'set_type',
+            # Interface references
+            'set_interface': 'set_requiredInterface',  # or providedInterface depending on port type
+            'set_interfaceRef': 'set_requiredInterface',
+        }
+        
+        for wrong, correct in method_fixes.items():
+            if wrong in code:
+                code = code.replace(wrong, correct)
+                print(f"   🔧 Proactive fix: {wrong} → {correct}")
+        
+        # Fix reference patterns: new_*Ref().set_value(x) → set_*(x)
+        ref_pattern = r'\.new_(\w+)Ref\(\)\.set_value\(([^)]+)\)'
+        def ref_fix(match):
+            ref_type = match.group(1)
+            value = match.group(2)
+            setter_name = ref_type[0].lower() + ref_type[1:]
+            return f'.set_{setter_name}({value})'
+        
+        code = re.sub(ref_pattern, ref_fix, code)
+        
+        # Fix save() with arguments
+        code = re.sub(r'autosarfactory\.save\([^)]+\)', 'autosarfactory.save()', code)
+        
+        # Fix ByteOrder string literals
+        code = re.sub(
+            r'set_packingByteOrder\(["\']MOST-SIGNIFICANT-BYTE-LAST["\']\)',
+            'set_packingByteOrder(autosarfactory.ByteOrderEnum.VALUE_MOST_SIGNIFICANT_BYTE_LAST)',
+            code
+        )
+        code = re.sub(
+            r'set_packingByteOrder\(["\']MOST-SIGNIFICANT-BYTE-FIRST["\']\)',
+            'set_packingByteOrder(autosarfactory.ByteOrderEnum.VALUE_MOST_SIGNIFICANT_BYTE_FIRST)',
+            code
+        )
+        
+        return code
+    
+    # ========================================================================
+    # NEW: Pre-execution Symbol Validation (Reflexion Pattern)
+    # ========================================================================
+    
+    def validate_before_execution(self, code: str, depth: int = 0) -> Tuple[bool, str, List[SymbolError]]:
+        """
+        Validate code BEFORE execution by parsing AST and checking symbols.
+        This is the reflexion pattern - catch errors before they happen.
+        
+        Args:
+            code: The generated Python code
+            depth: Recursion depth to prevent infinite loops
+            
+        Returns:
+            Tuple of (is_valid, fixed_code, errors)
+        """
+        if depth > 3:
+            return True, code, []  # Stop recursion
+            
+        if not SYMBOL_VALIDATION_AVAILABLE or self.symbol_table is None:
+            return True, code, []  # Skip validation if not available
+        
+        # 0. PROACTIVE FIXES - Apply known hallucination patterns first
+        # Only apply on first pass to avoid cycling
+        if depth == 0:
+            code = self._apply_proactive_fixes(code)
+        
+        errors = []
+        
+        # 1. Parse the code
+        try:
+            tree = ast.parse(code)
+        except SyntaxError as e:
+            errors.append(SymbolError(
+                symbol_name="",
+                error_type="syntax",
+                context=str(e),
+                line_number=e.lineno
+            ))
+            return False, code, errors
+        
+        # 2. Find all method calls and validate them
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                symbol_errors = self._validate_call_node(node)
+                errors.extend(symbol_errors)
+        
+        # 3. If errors found, try to auto-fix
+        if errors:
+            fixed_code = self._apply_symbol_fixes(code, errors)
+            
+            # Check if fixes resolved all issues
+            if fixed_code != code:
+                # Re-validate the fixed code
+                is_valid, _, remaining_errors = self.validate_before_execution(fixed_code, depth + 1)
+                if is_valid or len(remaining_errors) < len(errors):
+                    return is_valid, fixed_code, remaining_errors
+            
+            return False, code, errors
+        
+        return True, code, []
+    
+    def _validate_call_node(self, node: ast.Call) -> List[SymbolError]:
+        """Validate a function/method call AST node."""
+        errors = []
+        
+        # Extract method name
+        method_name = None
+        class_context = None
+        
+        if isinstance(node.func, ast.Attribute):
+            method_name = node.func.attr
+            
+            # Try to determine the class context
+            if isinstance(node.func.value, ast.Name):
+                # Direct call like: autosarfactory.new_file(...)
+                class_context = node.func.value.id
+            elif isinstance(node.func.value, ast.Attribute):
+                # Chained call - harder to determine context
+                pass
+        
+        if method_name is None:
+            return errors
+        
+        # Check if this is an autosarfactory method call
+        if method_name.startswith(('new_', 'set_', 'get_')):
+            # Validate against symbol table
+            if not self.symbol_table.has_method(method_name):
+                # Find similar methods
+                suggestions = self.symbol_table.find_similar_method(method_name, limit=3)
+                
+                errors.append(SymbolError(
+                    symbol_name=method_name,
+                    error_type="method",
+                    context=f"Method call in code",
+                    line_number=node.lineno if hasattr(node, 'lineno') else None,
+                    suggestion=suggestions[0] if suggestions else None
+                ))
+        
+        return errors
+    
+    def _apply_symbol_fixes(self, code: str, errors: List[SymbolError]) -> str:
+        """Apply automatic fixes for symbol errors."""
+        fixed_code = code
+        
+        for error in errors:
+            if error.error_type == "method" and error.suggestion:
+                # Replace the hallucinated method with the suggested one
+                fixed_code = fixed_code.replace(error.symbol_name, error.suggestion)
+                print(f"   🔧 Auto-fixed: {error.symbol_name} → {error.suggestion}")
+        
+        return fixed_code
+    
+    def _check_abstract_instantiation(self, code: str) -> List[SymbolError]:
+        """Check if code tries to instantiate abstract classes."""
+        errors = []
+        
+        if not SYMBOL_VALIDATION_AVAILABLE or self.symbol_table is None:
+            return errors
+        
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            return errors
+        
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                # Check for direct class instantiation
+                if isinstance(node.func, ast.Name):
+                    class_name = node.func.id
+                    
+                    if class_name in self.symbol_table.classes:
+                        class_info = self.symbol_table.classes[class_name]
+                        if class_info.is_abstract:
+                            errors.append(SymbolError(
+                                symbol_name=class_name,
+                                error_type="abstract",
+                                context=f"Cannot instantiate abstract class",
+                                line_number=node.lineno if hasattr(node, 'lineno') else None,
+                                suggestion="Use a factory method instead"
+                            ))
+        
+        return errors
+    
+    def validate_and_fix(self, code: str, plan: dict) -> Tuple[str, List[str]]:
+        """
+        Complete validation and fixing pipeline (hybrid approach).
+        
+        1. Pre-execution validation (AST + symbol table)
+        2. Auto-fix what can be fixed
+        3. Report remaining issues
+        
+        Args:
+            code: Generated code
+            plan: Execution plan for context
+            
+        Returns:
+            Tuple of (potentially_fixed_code, list_of_remaining_issues)
+        """
+        issues = []
+        
+        # Step 1: Pre-execution symbol validation
+        is_valid, fixed_code, symbol_errors = self.validate_before_execution(code)
+        
+        if symbol_errors:
+            for error in symbol_errors:
+                if error.suggestion:
+                    issues.append(f"Fixed: {error.symbol_name} → {error.suggestion}")
+                else:
+                    issues.append(f"Error on line {error.line_number}: {error.symbol_name} ({error.error_type})")
+        
+        # Step 2: Check for abstract class instantiation
+        abstract_errors = self._check_abstract_instantiation(fixed_code)
+        for error in abstract_errors:
+            issues.append(f"Abstract class instantiation: {error.symbol_name}")
+        
+        # Step 3: Apply deterministic pattern fixes
+        pattern_fixed = self._apply_pattern_fixes(fixed_code, "")
+        if pattern_fixed != fixed_code:
+            issues.append("Applied pattern fixes (reference patterns, byte order, etc.)")
+            fixed_code = pattern_fixed
+        
+        return fixed_code, issues
 

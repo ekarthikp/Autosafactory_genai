@@ -221,15 +221,25 @@ Correct structure for mapping SWCs to ECUs:
 
 1. Create System:
    system = package.new_System("SystemName")
-   system.set_rootSoftwareComposition(composition)
+   # NOTE: Use new_RootSoftwareComposition() if needed
 
 2. Create SystemMapping (INSIDE System):
    sys_map = system.new_Mapping("SystemMappingName")
 
 3. Create SwcToEcuMapping (INSIDE SystemMapping):
-   swc_map = sys_map.new_SwcToEcuMapping("MapName")
-   swc_map.set_swComponentPrototype(comp_proto)  # Reference to prototype in composition
+   CRITICAL: The method is new_SwMapping() NOT new_SwcToEcuMapping()!
+   
+   swc_map = sys_map.new_SwMapping("MapName")  # Returns SwcToEcuMapping object
    swc_map.set_ecuInstance(ecu_instance)
+   
+   # To reference the SWC prototype, use new_Component():
+   comp_ref = swc_map.new_Component()
+   # comp_ref can then be configured to point to the component prototype
+
+WRONG METHODS (DO NOT USE):
+- new_SwcToEcuMapping() - DOES NOT EXIST on SystemMapping
+- new_SoftwareComponentToEcuMapping() - DOES NOT EXIST
+- set_swComponentPrototype() - Use new_Component() instead
 
 
 =======================================================================
@@ -242,9 +252,41 @@ Correct structure for S2S Props:
    props_set = package.new_SignalServiceTranslationPropsSet("PropsSetName")
 
 2. Create Props in the PropsSet:
-   props = props_set.new_SignalServiceTranslationProps("PropsName")
+   CRITICAL: The method is new_SignalServiceTranslationProp() NOT new_SignalServiceTranslationProps()!
+   
+   props = props_set.new_SignalServiceTranslationProp("PropsName")
 
 3. Link to Composition:
    props.set_composition(composition)
 
+
+=======================================================================
+COMMON API MISTAKES TO AVOID
+=======================================================================
+
+1. SystemMapping:
+   WRONG: sys_map.new_SwcToEcuMapping("name")
+   RIGHT: sys_map.new_SwMapping("name")  # Returns SwcToEcuMapping
+
+2. SignalServiceTranslationPropsSet:
+   WRONG: props_set.new_SignalServiceTranslationProps("name")
+   RIGHT: props_set.new_SignalServiceTranslationProp("name")  # Note: singular
+
+3. ServiceInterface:
+   WRONG: si.new_EventGroup("name")  # DOES NOT EXIST
+   RIGHT: Use SomeipServiceInterfaceDeployment.new_EventGroup()
+
+4. CompositionSwComponentType:
+   WRONG: composition.new_SwComponentPrototype("name")
+   WRONG: composition.new_ComponentPrototype("name")
+   RIGHT: composition.new_Component("name")
+
+5. SwcToImplMapping:
+   NOTE: SwcToImplMapping does NOT have set_ecuInstance()
+   Use new_SwMapping() instead which returns SwcToEcuMapping
+
+6. RVariableInAtomicSwcInstanceRef (and similar Instance Refs):
+   WRONG: iref.set_targetDataPrototype(data_element)
+   WRONG: iref.set_targetVariableDataPrototype(data_element)
+   RIGHT: iref.set_targetDataElement(data_element)
 

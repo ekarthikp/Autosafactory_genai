@@ -107,22 +107,33 @@ DO NOT use patterns like new_*Ref() + set_value() - these methods don't exist!
     - WRONG: internal_behavior.new_RunnableEntity("name")
     - RIGHT: internal_behavior.new_Runnable("name")  # Returns RunnableEntity
 
-14. DATA ACCESS METHODS (note the spelling!):
-    - WRONG: runnable.new_DataReadAccess("name")
-    - RIGHT: runnable.new_DataReadAcces("name")  # One 's'!
-    - Same for new_DataWriteAcces (one 's')
 
-15. DATA ACCESS VARIABLE REFERENCES:
-    - For interface data elements (VariableDataPrototype from SenderReceiverInterface):
-      accessed_var = data_access.new_AccessedVariable()
-      var_ref = accessed_var.new_AutosarVariable()  # For interface data elements!
-      var_ref.set_portPrototype(port)  # Direct setter!
-      var_ref.set_targetDataPrototype(data_element)  # Direct setter!
+14. DATA ACCESS METHODS - CHOOSE THE RIGHT ONE (CRITICAL!):
+    
+    For P-Port (Provider/Sender):
+    - Use new_DataSendPoint("name") for sending data
+    - dsp = runnable.new_DataSendPoint("dsp")
+    - var = dsp.new_AccessedVariable().new_AutosarVariable()
+    - var.set_portPrototype(p_port)
+    - var.set_targetDataPrototype(data_element)
+    
+    For R-Port (Receiver) with DataReceivedEvent:
+    - Use new_DataReceivePointByArgument("name")
+    - dra = runnable.new_DataReceivePointByArgument("dra")
+    - var = dra.new_AccessedVariable().new_AutosarVariable()
+    - var.set_portPrototype(r_port)
+    - var.set_targetDataPrototype(data_element)
+    
+    Alternative (less common):
+    - new_DataReadAcces("name") - NOTE: ONE 's'!
+    - new_DataWriteAcces("name") - NOTE: ONE 's'!
 
-    - For implementation data type sub-elements (less common):
-      var_ref = accessed_var.new_AutosarVariableInImplDatatype()
-      var_ref.set_portPrototype(port)
-      var_ref.set_targetDataPrototype(impl_type_element)  # Must be AbstractImplementationDataTypeElement!
+15. DATA RECEIVED EVENT (for R-Port):
+    - dre = behavior.new_DataReceivedEvent("DRE_Name")
+    - data = dre.new_Data()
+    - data.set_contextRPort(r_port)  # NOT set_port!
+    - data.set_targetDataElement(data_element)  # Use targetDataElement for events!
+    - dre.set_startOnEvent(runnable)
 
 === COMPOSITION AND CONNECTORS ===
 
@@ -203,11 +214,14 @@ DO NOT use patterns like new_*Ref() + set_value() - these methods don't exist!
     - RIGHT: EventGroups are NOT created on ServiceInterface in this version.
              They are typically handled via Deployment or configuration.
 
-26. SYSTEM MAPPING & ECU MAPPING:
-    - WRONG: system.new_SwcToEcuMapping(...) or package.new_SwcToEcuMapping(...)
-    - RIGHT: Must be created inside a SystemMapping container:
+26. SYSTEM MAPPING & ECU MAPPING (CRITICAL!):
+    - WRONG: sys_map.new_SwcToEcuMapping("Name")  # DOES NOT EXIST!
+    - WRONG: sys_map.new_SoftwareComponentToEcuMapping("Name")  # DOES NOT EXIST!
+    - RIGHT: The method is new_SwMapping() which returns a SwcToEcuMapping object:
       sys_map = system.new_Mapping("Name")
-      swc_map = sys_map.new_SwcToEcuMapping("Name")
+      swc_map = sys_map.new_SwMapping("Name")  # Returns SwcToEcuMapping!
+      swc_map.set_ecuInstance(ecu_instance)
+      comp_ref = swc_map.new_Component()  # To reference the SWC prototype
 
 27. CAN FRAME TRIGGERING:
     - WRONG: frame.new_CanFrameTriggering(...)
@@ -215,11 +229,11 @@ DO NOT use patterns like new_*Ref() + set_value() - these methods don't exist!
       trig = channel.new_CanFrameTriggering("Name")
       trig.set_frame(frame)
 
-28. SIGNAL TO SERVICE TRANSLATION PROPS:
-    - WRONG: composition.new_SignalServiceTranslationProps(...)
-    - RIGHT: Must be created in a PropsSet in a Package:
+28. SIGNAL TO SERVICE TRANSLATION PROPS (CRITICAL!):
+    - WRONG: props_set.new_SignalServiceTranslationProps("Name")  # Note plural!
+    - RIGHT: props_set.new_SignalServiceTranslationProp("Name")  # Singular 'Prop'!
       props_set = package.new_SignalServiceTranslationPropsSet("Name")
-      props = props_set.new_SignalServiceTranslationProps("Name")
+      props = props_set.new_SignalServiceTranslationProp("Name")  # Singular!
       props.set_composition(composition)
 """
 
@@ -283,46 +297,76 @@ pdu_to_frame.set_packingByteOrder(autosarfactory.ByteOrderEnum.VALUE_MOST_SIGNIF
 pdu_to_frame.set_pdu(ipdu)  # Direct setter - no need for new_PduRef()!
 '''
 
-# Working code pattern for software component
+# Working code pattern for software component (VERIFIED FROM ACTUAL WORKING CODE!)
 SWC_PATTERN = '''
-# === Software Component Pattern ===
-# Create interface first
-sr_interface = interfaces_pkg.new_SenderReceiverInterface("If_SignalName")
-data_element = sr_interface.new_DataElement("DataElementName")
+# === Software Component Pattern (VERIFIED WORKING!) ===
 
-# Set data type using DIRECT SETTER (NOT new_TypeRef()!)
-data_element.set_type(impl_data_type)  # Direct setter!
+# Create interface and data element
+srIf = interfaces_pkg.new_SenderReceiverInterface('srif1')
+vdp = srIf.new_DataElement('de1')  # NOT new_VariableDataPrototype!
+vdp.set_type(impl_data_type)  # Direct setter!
 
-# Create software component
-swc = components_pkg.new_ApplicationSwComponentType("ComponentName_SWC")
-
-# Add receiver port (R-Port) - use DIRECT SETTER for interface!
-r_port = swc.new_RPortPrototype("RPort_Name")
-r_port.set_requiredInterface(sr_interface)  # Direct setter!
-
-# Add provider port (P-Port) - use DIRECT SETTER for interface!
-p_port = swc.new_PPortPrototype("PPort_Name")
-p_port.set_providedInterface(sr_interface)  # Direct setter!
+# Create software component with P-Port (provider)
+asw1 = swcs_pkg.new_ApplicationSwComponentType('asw1')
+port1 = asw1.new_PPortPrototype('outPort')
+port1.set_providedInterface(srIf)  # Direct setter!
 
 # Create internal behavior
-internal_behavior = swc.new_InternalBehavior("ComponentName_Behavior")
+beh1 = asw1.new_InternalBehavior('beh1')  # NOT new_SwcInternalBehavior!
 
-# Add runnable - use new_Runnable, NOT new_RunnableEntity!
-runnable = internal_behavior.new_Runnable("RunnableName")
-runnable.set_symbol("RunnableSymbol")
+# Create timing event
+te1 = beh1.new_TimingEvent('te_5ms')
+te1.set_period(0.005)  # 5ms in seconds
 
-# Add timing event
-timing_event = internal_behavior.new_TimingEvent("TE_10ms")
-timing_event.set_period(0.01)  # 10ms
-timing_event.set_startOnEvent(runnable)  # Direct setter!
+# Create runnable
+run1 = beh1.new_Runnable('Runnable_1')  # NOT new_RunnableEntity!
+run1.set_symbol('Run1')
+te1.set_startOnEvent(run1)  # Direct setter!
 
-# Add data access (note: one 's' in DataReadAcces/DataWriteAcces!)
-data_read = runnable.new_DataReadAcces("DRA_Name")
-accessed_var = data_read.new_AccessedVariable()
-# Use new_AutosarVariable for interface data elements (VariableDataPrototype)
-var_ref = accessed_var.new_AutosarVariable()
-var_ref.set_portPrototype(r_port)  # Direct setter!
-var_ref.set_targetDataPrototype(data_element)  # Direct setter!
+# DATA SEND POINT (for P-Port) - CORRECT PATTERN!
+dsp = run1.new_DataSendPoint('dsp')  # NOT new_DataWriteAcces for P-Port!
+var = dsp.new_AccessedVariable().new_AutosarVariable()
+var.set_portPrototype(port1)  # Direct setter!
+var.set_targetDataPrototype(vdp)  # Use set_targetDataPrototype!
+
+# === R-Port (receiver) pattern ===
+asw2 = swcs_pkg.new_ApplicationSwComponentType('asw2')
+port2 = asw2.new_RPortPrototype('inPort')
+port2.set_requiredInterface(srIf)  # Direct setter!
+
+beh2 = asw2.new_InternalBehavior('beh2')
+
+# Data Received Event - triggers on data arrival
+dre = beh2.new_DataReceivedEvent('DRE_Vdp')
+data = dre.new_Data()
+data.set_contextRPort(port2)  # NOT set_port!
+data.set_targetDataElement(vdp)  # Use set_targetDataElement for events!
+
+run2 = beh2.new_Runnable('Runnable_2')
+run2.set_symbol('Run2')
+dre.set_startOnEvent(run2)
+
+# DATA RECEIVE POINT BY ARGUMENT (for R-Port) - CORRECT PATTERN!
+dra = run2.new_DataReceivePointByArgument('dra')  # NOT new_DataReadAcces for R-Port with events!
+var_dra = dra.new_AccessedVariable().new_AutosarVariable()
+var_dra.set_portPrototype(port2)
+var_dra.set_targetDataPrototype(vdp)  # Use set_targetDataPrototype!
+
+# === Composition and Connectors ===
+composition = swcs_pkg.new_CompositionSwComponentType('Comp')
+asw1_proto = composition.new_Component('asw1_proto')  # NOT new_SwComponentPrototype!
+asw2_proto = composition.new_Component('asw2_proto')
+asw1_proto.set_type(asw1)  # Direct setter!
+asw2_proto.set_type(asw2)
+
+# Assembly connector
+conn1 = composition.new_AssemblySwConnector('conn1')
+provider = conn1.new_Provider()
+provider.set_contextComponent(asw1_proto)
+provider.set_targetPPort(port1)  # NOT set_port!
+requester = conn1.new_Requester()
+requester.set_contextComponent(asw2_proto)
+requester.set_targetRPort(port2)  # NOT set_port!
 '''
 
 # Working code pattern for data types

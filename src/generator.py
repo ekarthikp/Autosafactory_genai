@@ -1,7 +1,21 @@
 from src.utils import get_llm_model
 from src.knowledge import inspect_class
 from src.patterns import get_pattern_for_task, get_minimal_example, CRITICAL_API_HINTS
-from src.rag_codebase import CodebaseKnowledgeBase
+# Note: CodebaseKnowledgeBase imported lazily in __init__ to avoid tokenizer issues
+
+# Import neuro-symbolic components for constrained generation
+try:
+    from src.constrained_generator import (
+        ConstrainedGenerator, 
+        get_constrained_generator,
+        create_structured_generation_prompt
+    )
+    from src.ast_indexer import get_symbol_table
+    from src.code_graph import get_code_graph
+    CONSTRAINED_GENERATION_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Constrained generation not available: {e}")
+    CONSTRAINED_GENERATION_AVAILABLE = False
 
 # Pattern for loading existing ARXML
 EDIT_MODE_PATTERN = '''
@@ -89,15 +103,29 @@ autosarfactory.save()  # Save to original file
 
 
 class Generator:
-    def __init__(self, enable_deep_thinking=True):
+    def __init__(self, enable_deep_thinking=True, enable_codebase_kb=False):
         self.model = get_llm_model()
         self.enable_deep_thinking = enable_deep_thinking
         self.last_thinking = None  # Store thinking for debugging
         self.codebase_kb = None
-        try:
-            self.codebase_kb = CodebaseKnowledgeBase()
-        except Exception as e:
-            print(f"Warning: Could not initialize Codebase Knowledge Base: {e}")
+        
+        # Initialize RAG knowledge base (disabled by default due to tokenizer thread panic)
+        # The new constrained generation system provides better API validation
+        if enable_codebase_kb:
+            try:
+                from src.rag_codebase import CodebaseKnowledgeBase
+                self.codebase_kb = CodebaseKnowledgeBase()
+            except Exception as e:
+                print(f"Warning: Could not initialize Codebase Knowledge Base: {e}")
+        
+        # Initialize constrained generation components
+        self.constrained_generator = None
+        if CONSTRAINED_GENERATION_AVAILABLE:
+            try:
+                self.constrained_generator = get_constrained_generator()
+                print("Generator: Constrained generation enabled")
+            except Exception as e:
+                print(f"Warning: Constrained generation init failed: {e}")
 
     def _deep_think(self, plan, output_file, is_edit_mode):
         """
@@ -229,6 +257,17 @@ Return your analysis as a JSON object:
 
         context_str += rag_context
 
+        # 2.2 Add constrained generation context (NEURO-SYMBOLIC)
+        constraint_prompt = ""
+        if self.constrained_generator and CONSTRAINED_GENERATION_AVAILABLE:
+            try:
+                constraint_prompt = self.constrained_generator.generate_constraint_prompt(
+                    list(expanded_classes)
+                )
+                print(f"   🔒 Added API constraints for {len(expanded_classes)} classes")
+            except Exception as e:
+                print(f"Warning: Constraint prompt generation failed: {e}")
+
         # 3. Get relevant patterns based on plan content
         relevant_patterns = get_pattern_for_task(plan_text)
 
@@ -294,27 +333,55 @@ RECOMMENDATIONS:
 
 """
         
-        # 6. Construct Prompt with patterns and examples
+        # 6. Construct Prompt - RULES FIRST, then task
+        # LLMs weight early prompt content more heavily
+        # Read verified API CHEAT SHEET (Condensed for tokens)
+        api_ref_content = ""
+        try:
+            with open(os.path.join(os.path.dirname(__file__), "api_cheat_sheet.txt"), "r") as f:
+                api_ref_content = f.read()
+        except:
+            api_ref_content = "API Rules not found."
+
+        # 6. Construct Prompt - RULES FIRST, then task
+        # LLMs weight early prompt content more heavily
         prompt = f"""
 You are an Expert AUTOSAR Code Generator.
 You must write a complete, executable Python script using the 'autosarfactory' library.
-{mode_instruction}
-TASK:
-Implement the following plan.
 
-PLAN:
+=== CRITICAL API RULES (STRICT COMPLIANCE REQUIRED) ===
+{api_ref_content}
+
+=== MANDATORY API RULES (READ FIRST!) ===
+{CRITICAL_API_HINTS}
+
+=== VALID API METHODS (USE ONLY THESE!) ===
+{constraint_prompt}
+
+=== WORKING CODE PATTERNS ===
+{relevant_patterns}
+
+=== MINIMAL WORKING EXAMPLE ===
+{get_minimal_example()}
+
+{mode_instruction}
+
+=== YOUR TASK ===
+Implement the following plan:
+
 {plan['checklist']}
 
 {thinking_section}
-{CRITICAL_API_HINTS}
 
-WORKING CODE PATTERNS (USE THESE AS REFERENCE):
-{relevant_patterns}
+=== FINAL REMINDERS (DO NOT VIOLATE!) ===
+1. new_InternalBehavior() NOT new_SwcInternalBehavior()
+2. new_Runnable() NOT new_RunnableEntity()
+3. new_DataReadAcces() and new_DataWriteAcces() (ONE 's'!)
+4. set_frame(obj), set_iSignal(obj), set_pdu(obj) - DIRECT SETTERS!
+5. Baudrate: can_variant.set_baudrate(500000)
+6. SOMEIP: new_SomeipServiceInterfaceDeployment (lowercase 'p')
 
-COMPLETE WORKING EXAMPLE FOR REFERENCE:
-{get_minimal_example()}
-
-API KNOWLEDGE (SOURCE OF TRUTH - Available Classes and Methods):
+API KNOWLEDGE:
 {context_str}
 
 CRITICAL INSTRUCTIONS:
@@ -418,6 +485,20 @@ GENERATE THE COMPLETE PYTHON SCRIPT:
             # SOME/IP naming (lowercase 'p')
             ('new_SomeIpServiceInterfaceDeployment', 'new_SomeipServiceInterfaceDeployment'),
             ('new_SomeIpEventDeployment', 'new_SomeipEventDeployment'),
+            # === CRITICAL: SystemMapping fixes ===
+            # SystemMapping.new_SwcToEcuMapping() does NOT exist! Use new_SwMapping()
+            ('new_SwcToEcuMapping', 'new_SwMapping'),  # Returns SwcToEcuMapping object
+            ('new_SoftwareComponentToEcuMapping', 'new_SwMapping'),  # Also wrong
+            # === CRITICAL: SignalServiceTranslationPropsSet fixes ===
+            # The method ends with 'Prop' (singular), not 'Props'
+            ('new_SignalServiceTranslationProps', 'new_SignalServiceTranslationProp'),
+            # === CRITICAL: RVariableInAtomicSwcInstanceRef fixes ===
+            # set_targetDataPrototype does NOT exist! Use set_targetDataElement
+            ('set_targetDataPrototype', 'set_targetDataElement'),
+            ('set_targetVariableDataPrototype', 'set_targetDataElement'),
+            # === CRITICAL: CommunicationConnector fixes ===
+            # set_communicationCluster does NOT exist! Use set_commController
+            ('set_communicationCluster', 'set_commController'),
         ]
         
         for old, new in method_fixes:

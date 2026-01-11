@@ -1,0 +1,40 @@
+=== CRITICAL AUTOSARFACTORY API RULES (STRICT STRICT STRICT!) ===
+
+1. IMPORTS: 
+   - RIGHT: from autosarfactory import autosarfactory
+   - USAGE: autosarfactory.read(), autosarfactory.new_file()
+   - WRONG: import AutosarFactory, from Autosarfactory import ...
+
+2. ECU MAPPING:
+   - RIGHT: new_SwMapping('name')  (Returns SwcToEcuMapping)
+   - WRONG: new_SwcToEcuMapping(), new_EcuMapping()
+
+3. DATA SENDER (P-Port):
+   - RIGHT: dsp = runnable.new_DataSendPoint('dsp')
+   - RIGHT: var = dsp.new_AccessedVariable().new_AutosarVariable()
+   - RIGHT: var.set_portPrototype(p_port)
+   - RIGHT: var.set_targetDataPrototype(data_elem)
+   - WRONG: new_DataWriteAcces (for P-Port), set_variableDataPrototype
+
+4. DATA RECEIVER (R-Port with Event):
+   - RIGHT: dra = runnable.new_DataReceivePointByArgument('dra')
+   - RIGHT: var = dra.new_AccessedVariable().new_AutosarVariable()
+   - WRONG: new_DataReadAcces (for R-Port events), set_dataPrototype
+
+5. EVENTS:
+   - RIGHT: event.set_targetDataElement(data_elem)
+   - WRONG: set_targetDataPrototype (on events)
+   - RIGHT: new_ISignalIPdu('name')
+   - WRONG: new_IPdu()
+
+6. COMPOSITION:
+   - RIGHT: new_Component('name')
+   - RIGHT: component.set_type(swc_type)
+   - WRONG: new_SwComponentPrototype(), new_ComponentPrototype()
+   - RIGHT: mapping.add_contextComponent(comp)
+   - WRONG: set_contextComponent (for lists)
+
+7. COMMON TYPES:
+   - RIGHT: new_InternalBehavior() (NOT SwcInternalBehavior)
+   - RIGHT: new_Runnable() (NOT RunnableEntity)
+   - RIGHT: new_DataReadAcces() (ONE 's')

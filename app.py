@@ -193,167 +193,249 @@ def render_provider_selector():
 
 
 def inject_custom_css():
-    """Inject custom CSS for modern dark theme with gradient accents."""
+    """Inject custom CSS for dark theme with guaranteed text visibility."""
     st.markdown("""
     <style>
-    /* Modern Dark Theme with Gradient Accents */
-    :root {
-        --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        --accent-color: #667eea;
-        --accent-hover: #764ba2;
-        --success-color: #10b981;
-        --warning-color: #f59e0b;
-        --error-color: #ef4444;
+    /* ===========================================
+       AUTOSAR Agent - Dark Theme (High Contrast)
+       =========================================== */
+    
+    /* ROOT: Force dark backgrounds everywhere */
+    .stApp, .main, [data-testid="stAppViewContainer"] {
+        background-color: #0d1117 !important;
+        color: #e6edf3 !important;
     }
     
-    /* Main container styling */
-    .stApp {
-        background: linear-gradient(180deg, #0f0f1a 0%, #1a1a2e 50%, #16213e 100%);
+    /* SIDEBAR: Dark surface */
+    [data-testid="stSidebar"], 
+    [data-testid="stSidebar"] > div {
+        background-color: #161b22 !important;
     }
     
-    /* Sidebar styling with glassmorphism */
-    [data-testid="stSidebar"] {
-        background: rgba(26, 26, 46, 0.95);
-        backdrop-filter: blur(10px);
-        border-right: 1px solid rgba(102, 126, 234, 0.2);
+    /* ALL TEXT: Force light color on dark background */
+    .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6,
+    .stApp p, .stApp span, .stApp div, .stApp label, .stApp li,
+    [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, 
+    [data-testid="stSidebar"] h3, [data-testid="stSidebar"] h4,
+    [data-testid="stSidebar"] p, [data-testid="stSidebar"] span,
+    [data-testid="stSidebar"] div, [data-testid="stSidebar"] label {
+        color: #e6edf3 !important;
+    }
+    
+    /* CODE BLOCKS: Dark background with light text */
+    .stCodeBlock, 
+    .stCodeBlock pre,
+    .stCodeBlock code,
+    pre, code,
+    [data-testid="stCodeBlock"],
+    [data-testid="stCodeBlock"] pre,
+    [data-testid="stCodeBlock"] code,
+    .element-container pre,
+    .element-container code {
+        background-color: #161b22 !important;
+        color: #e6edf3 !important;
+        border: 1px solid #30363d !important;
+    }
+    
+    /* CODE TEXT specifically */
+    code, pre code, .stCodeBlock code span {
+        color: #e6edf3 !important;
+    }
+    
+    /* EXPANDER: Dark background */
+    .streamlit-expanderHeader,
+    [data-testid="stExpander"] summary,
+    [data-testid="stExpander"] {
+        background-color: #161b22 !important;
+        color: #e6edf3 !important;
+        border-color: #30363d !important;
+    }
+    
+    .streamlit-expanderHeader span,
+    .streamlit-expanderHeader p,
+    [data-testid="stExpander"] p,
+    [data-testid="stExpander"] span {
+        color: #e6edf3 !important;
+    }
+    
+    /* EXPANDABLE CONTENT */
+    .streamlit-expanderContent,
+    [data-testid="stExpander"] > div {
+        background-color: #0d1117 !important;
+        color: #e6edf3 !important;
+    }
+    
+    /* ALERTS/STATUS MESSAGES */
+    .stAlert, .stSuccess, .stError, .stWarning, .stInfo,
+    [data-testid="stAlert"] {
+        color: #e6edf3 !important;
+    }
+    
+    .stSuccess { background-color: rgba(63, 185, 80, 0.15) !important; border-left: 3px solid #3fb950 !important; }
+    .stError { background-color: rgba(248, 81, 73, 0.15) !important; border-left: 3px solid #f85149 !important; }
+    .stWarning { background-color: rgba(210, 153, 34, 0.15) !important; border-left: 3px solid #d29922 !important; }
+    .stInfo { background-color: rgba(88, 166, 255, 0.15) !important; border-left: 3px solid #58a6ff !important; }
+    
+    .stSuccess p, .stSuccess span, .stSuccess div,
+    .stError p, .stError span, .stError div,
+    .stWarning p, .stWarning span, .stWarning div,
+    .stInfo p, .stInfo span, .stInfo div {
+        color: #e6edf3 !important;
+    }
+    
+    /* BUTTONS */
+    .stButton > button {
+        background-color: #21262d !important;
+        color: #e6edf3 !important;
+        border: 1px solid #30363d !important;
+    }
+    
+    .stButton > button:hover {
+        background-color: #30363d !important;
+        border-color: #58a6ff !important;
     }
     
     [data-testid="stSidebar"] .stButton > button {
-        background: var(--primary-gradient);
-        color: white;
-        border: none;
-        border-radius: 8px;
-        padding: 0.75rem 1.5rem;
-        font-weight: 600;
-        transition: all 0.3s ease;
-        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+        background-color: #58a6ff !important;
+        color: #0d1117 !important;
+        border: none !important;
     }
     
-    [data-testid="stSidebar"] .stButton > button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
-    }
-    
-    /* Headers with gradient text */
-    h1, h2, h3 {
-        background: var(--primary-gradient);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-    }
-    
-    /* Chat input styling */
+    /* INPUT FIELDS */
+    input, textarea, [data-testid="stTextInput"] input,
+    [data-testid="stTextArea"] textarea,
     [data-testid="stChatInput"] textarea {
-        background: rgba(255, 255, 255, 0.05);
-        border: 1px solid rgba(102, 126, 234, 0.3);
-        border-radius: 12px;
-        color: white;
+        background-color: #161b22 !important;
+        color: #e6edf3 !important;
+        border: 1px solid #30363d !important;
     }
     
-    [data-testid="stChatInput"] textarea:focus {
-        border-color: var(--accent-color);
-        box-shadow: 0 0 15px rgba(102, 126, 234, 0.2);
+    ::placeholder {
+        color: #8b949e !important;
+        opacity: 1 !important;
     }
     
-    /* Chat message containers */
-    [data-testid="stChatMessage"] {
-        background: rgba(255, 255, 255, 0.03);
-        border-radius: 12px;
-        border: 1px solid rgba(255, 255, 255, 0.05);
-        padding: 1rem;
-        margin: 0.5rem 0;
+    /* SELECT BOXES */
+    [data-testid="stSelectbox"] > div,
+    [data-testid="stSelectbox"] > div > div {
+        background-color: #161b22 !important;
+        color: #e6edf3 !important;
+        border-color: #30363d !important;
     }
     
-    /* Success/Error message styling */
-    .stSuccess {
-        background: rgba(16, 185, 129, 0.1);
-        border-left: 4px solid var(--success-color);
-        border-radius: 8px;
-    }
-    
-    .stError {
-        background: rgba(239, 68, 68, 0.1);
-        border-left: 4px solid var(--error-color);
-        border-radius: 8px;
-    }
-    
-    .stWarning {
-        background: rgba(245, 158, 11, 0.1);
-        border-left: 4px solid var(--warning-color);
-        border-radius: 8px;
-    }
-    
-    /* Expander styling */
-    .streamlit-expanderHeader {
-        background: rgba(255, 255, 255, 0.05);
-        border-radius: 8px;
-        border: 1px solid rgba(102, 126, 234, 0.2);
-    }
-    
-    /* Metric cards */
+    /* METRICS */
     [data-testid="stMetric"] {
-        background: rgba(255, 255, 255, 0.03);
-        padding: 1rem;
-        border-radius: 12px;
-        border: 1px solid rgba(102, 126, 234, 0.2);
+        background-color: #161b22 !important;
+        border: 1px solid #30363d !important;
+        border-radius: 8px !important;
+        padding: 1rem !important;
     }
     
     [data-testid="stMetricValue"] {
-        color: var(--accent-color) !important;
+        color: #58a6ff !important;
     }
     
-    /* Download buttons */
-    .stDownloadButton > button {
-        background: transparent;
-        border: 2px solid var(--accent-color);
-        color: var(--accent-color);
-        border-radius: 8px;
-        transition: all 0.3s ease;
+    [data-testid="stMetricLabel"] {
+        color: #8b949e !important;
     }
     
-    .stDownloadButton > button:hover {
-        background: var(--primary-gradient);
-        border-color: transparent;
-        color: white;
+    /* CHAT MESSAGES */
+    [data-testid="stChatMessage"] {
+        background-color: #161b22 !important;
+        border: 1px solid #21262d !important;
     }
     
-    /* Selectbox styling */
-    [data-testid="stSelectbox"] > div > div {
-        background: rgba(255, 255, 255, 0.05);
-        border-radius: 8px;
+    [data-testid="stChatMessage"] p,
+    [data-testid="stChatMessage"] span,
+    [data-testid="stChatMessage"] div {
+        color: #e6edf3 !important;
     }
     
-    /* Slider styling */
-    .stSlider > div > div > div {
-        background: var(--primary-gradient);
+    /* MARKDOWN */
+    .stMarkdown, .stMarkdown p, .stMarkdown span,
+    .stMarkdown li, .stMarkdown div {
+        color: #e6edf3 !important;
     }
     
-    /* Quick start button container */
-    .quick-start-btn {
-        display: inline-block;
-        margin: 4px;
+    /* LINKS */
+    a, .stMarkdown a {
+        color: #58a6ff !important;
     }
     
-    /* Animated progress indicator */
-    @keyframes pulse {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.5; }
+    a:hover {
+        color: #79b8ff !important;
     }
     
-    .stSpinner > div {
-        animation: pulse 1.5s ease-in-out infinite;
+    /* HEADERS */
+    h1, h2, h3, h4, h5, h6 {
+        color: #e6edf3 !important;
     }
     
-    /* Code block styling */
-    .stCodeBlock {
-        border-radius: 12px;
-        border: 1px solid rgba(102, 126, 234, 0.2);
-    }
-    
-    /* Divider styling */
+    /* DIVIDERS */
     hr {
-        border-color: rgba(102, 126, 234, 0.2);
+        border-color: #30363d !important;
+        background-color: #30363d !important;
     }
+    
+    /* SCROLLBAR */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: #0d1117; }
+    ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #484f58; }
+    
+    /* FILE UPLOADER */
+    [data-testid="stFileUploader"] {
+        background-color: #161b22 !important;
+        border: 2px dashed #30363d !important;
+    }
+    
+    [data-testid="stFileUploader"] span,
+    [data-testid="stFileUploader"] p {
+        color: #e6edf3 !important;
+    }
+    
+    /* SLIDER */
+    .stSlider label, .stSlider p, .stSlider span {
+        color: #e6edf3 !important;
+    }
+    
+    /* CHECKBOX/RADIO */
+    .stCheckbox label, .stCheckbox span,
+    .stRadio label, .stRadio span {
+        color: #e6edf3 !important;
+    }
+    
+    /* CAPTION */
+    .stCaption, .stCaption p {
+        color: #8b949e !important;
+    }
+    
+    /* TABS */
+    .stTabs [data-baseweb="tab"] {
+        background-color: #161b22 !important;
+        color: #8b949e !important;
+        border: 1px solid #30363d !important;
+    }
+    
+    .stTabs [aria-selected="true"] {
+        background-color: #58a6ff !important;
+        color: #0d1117 !important;
+    }
+    
+    /* TOOLTIP */
+    [data-testid="stTooltipIcon"] {
+        color: #8b949e !important;
+    }
+    
+    /* JSON/DICT display */
+    .stJson, [data-testid="stJson"] {
+        background-color: #161b22 !important;
+    }
+    
+    .stJson span, [data-testid="stJson"] span {
+        color: #e6edf3 !important;
+    }
+    
     </style>
     """, unsafe_allow_html=True)
 
@@ -621,6 +703,33 @@ def run_generation_pipeline(provider=None, model=None):
     st.session_state.generated_code = code
     log_container.write("✅ Code Generated")
 
+    # === PRE-EXECUTION VALIDATION (NEURO-SYMBOLIC) ===
+    # This catches hallucinated methods BEFORE runtime
+    with status_container:
+        st.info("🔒 Validating API calls...")
+    
+    try:
+        from src.fixer import Fixer as FixerForValidation
+        validator = FixerForValidation()
+        is_valid, validated_code, validation_errors = validator.validate_before_execution(code)
+        
+        if validation_errors:
+            log_container.write(f"⚠️ Found {len(validation_errors)} invalid API calls:")
+            for err in validation_errors[:5]:  # Show first 5
+                if err.suggestion:
+                    log_container.write(f"   🔧 {err.symbol_name} → {err.suggestion}")
+                else:
+                    log_container.write(f"   ❌ {err.symbol_name} ({err.error_type})")
+            
+            if validated_code != code:
+                code = validated_code
+                st.session_state.generated_code = code
+                log_container.write("✅ Auto-fixed invalid API calls")
+        else:
+            log_container.write("✅ All API calls validated")
+    except Exception as e:
+        log_container.write(f"⚠️ Validation skipped: {e}")
+
     with status_container:
         st.info("Executing & Verifying...")
 
@@ -710,7 +819,17 @@ def run_generation_pipeline(provider=None, model=None):
                      log_container.write("🛑 Stopping: Code unchanged for 5 consecutive attempts. The fixer is stuck.")
                      break
             else:
-                log_container.write("✅ Fixer applied changes. Continuing...")
+                log_container.write("✅ Fixer applied changes.")
+                
+                # Validate the fixed code to catch any new hallucinations
+                try:
+                    _, validated_fixed, fix_errors = validator.validate_before_execution(fixed_code)
+                    if fix_errors and validated_fixed != fixed_code:
+                        log_container.write(f"   🔧 Auto-fixed {len(fix_errors)} additional invalid API calls")
+                        fixed_code = validated_fixed
+                except Exception:
+                    pass  # Continue without validation if it fails
+                
                 consecutive_unchanged = 0
             
             # Check if fix was actually attempted (not max attempts reached)

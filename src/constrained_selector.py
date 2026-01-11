@@ -422,7 +422,7 @@ class IntentParser:
         "cluster": ["CanCluster", "CanClusterVariant", "CanClusterConditional"],
         "baudrate": ["CanClusterConditional", "CanClusterVariant"],
         "frame": ["CanFrame", "CanFrameTriggering", "PduToFrameMapping"],
-        "signal": ["ISignal", "ISignalIPdu", "ISignalToPduMapping"],
+        "signal": ["ISignal", "ISignalIPdu", "ISignalToPduMapping", "SystemSignal"],
         "pdu": ["ISignalIPdu", "PduToFrameMapping", "ISignalToPduMapping"],
 
         # ECU
@@ -430,25 +430,40 @@ class IntentParser:
         "controller": ["CanCommunicationController", "CommunicationController"],
 
         # SWC
-        "component": ["ApplicationSwComponentType", "CompositionSwComponentType"],
+        "component": ["ApplicationSwComponentType", "CompositionSwComponentType", "SwComponentPrototype"],
         "swc": ["ApplicationSwComponentType", "SwcInternalBehavior"],
         "port": ["PPortPrototype", "RPortPrototype"],
         "interface": ["SenderReceiverInterface", "ClientServerInterface"],
         "behavior": ["SwcInternalBehavior", "RunnableEntity", "TimingEvent"],
-        "runnable": ["SwcInternalBehavior", "RunnableEntity"],
+        "runnable": ["SwcInternalBehavior", "RunnableEntity", "DataSendPoint", "DataReceivePointByArgument"],
         "event": ["TimingEvent", "DataReceivedEvent"],
+        "connector": ["AssemblySwConnector", "DelegationSwConnector"],
+        "composition": ["CompositionSwComponentType", "RootSoftwareComposition"],
 
-        # Types
-        "type": ["SwBaseType", "ImplementationDataType"],
-        "datatype": ["SwBaseType", "ImplementationDataType", "SwDataDefProps"],
+        # Data Types (comprehensive from example)
+        "type": ["SwBaseType", "ImplementationDataType", "StdCppImplementationDataType"],
+        "datatype": ["SwBaseType", "ImplementationDataType", "SwDataDefProps", "SwDataDefPropsVariant"],
+        "basetype": ["SwBaseType", "BaseTypeDirectDefinition"],
+        "uint8": ["SwBaseType", "ImplementationDataType"],
+        "array": ["StdCppImplementationDataType"],
+
+        # Compu Methods (from example)
+        "compu": ["CompuMethod", "CompuInternalToPhys", "CompuScales", "CompuScale", "CompuConst"],
+        "scale": ["CompuScale", "CompuScaleConstantContents", "CompuScaleRationalFormula"],
+        "limit": ["LowerLimit", "UpperLimit"],
+        "constraint": ["DataConstr", "DataConstrRule", "InternalConstrs"],
+
+        # System and Mapping (comprehensive)
+        "system": ["System", "SystemMapping", "RootSoftwareComposition"],
+        "mapping": ["SystemMapping", "SenderReceiverToSignalMapping", "SwMapping"],
+        "systemsignal": ["SystemSignal"],
 
         # Ethernet
         "ethernet": ["EthernetCluster", "EthernetPhysicalChannel"],
         "someip": ["SomeipServiceInterfaceDeployment"],
 
-        # System
-        "system": ["System", "SystemMapping"],
-        "mapping": ["SystemMapping", "SwcToEcuMapping", "ISignalToPduMapping"],
+        # Admin Data
+        "admin": ["AdminData", "Sdg", "Sd"],
     }
 
     def __init__(self, kb: UnifiedKnowledgeBase = None):

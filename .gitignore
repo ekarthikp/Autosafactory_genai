@@ -30,6 +30,14 @@ tps_knowledge_db/
 codebase_knowledge_db/
 knowledge_base.pkl
 
+# Cache files (auto-regenerated on first run)
+src/symbol_table.json
+src/code_graph_cache.json
+src/knowledge_graph.json
+
+# Runtime logs
+src/error_feedback.json
+
 # IDE
 .vscode/
 .idea/

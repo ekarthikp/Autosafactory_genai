@@ -34,6 +34,9 @@ from .knowledge_manager import KnowledgeManager
 # Error feedback system
 from .error_feedback_manager import get_error_feedback_manager
 
+# API validation
+from .api_validator import APIValidator, get_api_validator
+
 __all__ = [
     # Core classes
     'Planner',
@@ -53,4 +56,8 @@ __all__ = [
     # Knowledge management
     'KnowledgeManager',
     'get_error_feedback_manager',
+
+    # API validation
+    'APIValidator',
+    'get_api_validator',
 ]

@@ -210,10 +210,16 @@ Return your analysis as a JSON object:
         else:
             expanded_classes.add("new_file") # Function
             
-        # 2. Build API context using Knowledge Manager
+        # 2. Build PRECISE API context using both Knowledge Manager and API Validator
         context_str = km.get_context_for_classes(list(expanded_classes))
 
-        # 2.1 Enhance context with Codebase RAG
+        # 2.1 Add PRECISE API signatures using the validator
+        from src.api_validator import get_api_validator
+        validator = get_api_validator()
+        precise_api_context = validator.generate_api_context_for_plan(plan)
+        context_str = precise_api_context + "\n\n" + context_str
+
+        # 2.2 Enhance context with Codebase RAG
         rag_context = ""
         if self.codebase_kb:
             try:
@@ -396,15 +402,103 @@ GENERATE THE COMPLETE PYTHON SCRIPT:
         # PRE-EXECUTION VALIDATION: Fix known API mistakes before execution
         code = self._validate_and_fix_api_calls(code.strip())
 
+        # POST-FIX VALIDATION: Check if fixes resolved all issues
+        from src.api_validator import get_api_validator
+        validator = get_api_validator()
+        is_valid, errors, warnings = validator.validate_code(code)
+
+        # If still invalid after fixes, try ONE retry with error feedback
+        if not is_valid and len(errors) > 0:
+            print("   🔄 Code still has API errors after fixes, attempting ONE retry with corrections...")
+            code = self._retry_generation_with_feedback(
+                plan, output_file, edit_context, is_edit_mode,
+                context_str, relevant_patterns, mode_instruction, thinking,
+                errors
+            )
+
+        return code
+
+    def _retry_generation_with_feedback(self, plan, output_file, edit_context, is_edit_mode,
+                                       context_str, relevant_patterns, mode_instruction, thinking,
+                                       validation_errors):
+        """
+        Retry code generation with explicit validation error feedback.
+        This gives the LLM a second chance to fix API errors.
+        """
+        # Build error feedback
+        error_feedback = "\n".join(f"  • {err}" for err in validation_errors[:10])
+
+        retry_prompt = f"""
+You are an Expert AUTOSAR Code Generator.
+Your previous code generation had API ERRORS. Please fix them and regenerate.
+
+VALIDATION ERRORS FROM PREVIOUS ATTEMPT:
+{error_feedback}
+
+{mode_instruction}
+
+TASK:
+Implement the following plan.
+
+PLAN:
+{plan['checklist']}
+
+{CRITICAL_API_HINTS}
+
+WORKING CODE PATTERNS (USE THESE AS REFERENCE):
+{relevant_patterns}
+
+API KNOWLEDGE (SOURCE OF TRUTH - Available Classes and Methods):
+{context_str}
+
+CRITICAL REMINDERS:
+1. ONLY use methods that exist in the API KNOWLEDGE above
+2. DO NOT use methods like new_SwcInternalBehavior - use new_InternalBehavior
+3. DO NOT use new_RunnableEntity - use new_Runnable
+4. DO NOT use new_*Ref().set_value() - use direct setters
+5. Verify EVERY method name against the API KNOWLEDGE before using it
+
+GENERATE THE CORRECTED PYTHON SCRIPT:
+"""
+
+        print("   Generating corrected code...")
+        response = self.model.generate_content(retry_prompt)
+
+        code = response.text
+        # Clean markdown
+        if "```python" in code:
+            code = code.split("```python")[1].split("```")[0]
+        elif "```" in code:
+            code = code.split("```")[1].split("```")[0]
+
+        # Apply fixes again
+        code = self._validate_and_fix_api_calls(code.strip())
+
         return code
 
     def _validate_and_fix_api_calls(self, code: str) -> str:
         """
         Parse generated code and fix known common mistakes before execution.
-        This is faster and more reliable than LLM-based fixing for known patterns.
+        Now uses APIValidator for comprehensive validation against knowledge_graph.json.
         """
         import re
-        
+        from src.api_validator import get_api_validator
+
+        # Step 1: Use APIValidator for comprehensive checking
+        validator = get_api_validator()
+        is_valid, errors, warnings = validator.validate_code(code)
+
+        if not is_valid:
+            print("   ⚠️  API Validation found issues:")
+            for error in errors[:5]:  # Show first 5 errors
+                print(f"      {error}")
+
+        if warnings:
+            print("   ℹ️  API Validation warnings:")
+            for warning in warnings[:3]:  # Show first 3 warnings
+                print(f"      {warning}")
+
+        # Step 2: Apply known fixes (legacy patterns, still useful)
         # === Method name corrections ===
         method_fixes = [
             ('new_SwcInternalBehavior', 'new_InternalBehavior'),
@@ -419,7 +513,7 @@ GENERATE THE COMPLETE PYTHON SCRIPT:
             ('new_SomeIpServiceInterfaceDeployment', 'new_SomeipServiceInterfaceDeployment'),
             ('new_SomeIpEventDeployment', 'new_SomeipEventDeployment'),
         ]
-        
+
         for old, new in method_fixes:
             if old in code:
                 code = code.replace(old, new)

@@ -417,21 +417,101 @@ class IntentParser:
 
     # Mapping of keywords to relevant classes
     KEYWORD_TO_CLASSES = {
-        # CAN
+        # =====================================================================
+        # CAN (Classic)
+        # =====================================================================
         "can": ["CanCluster", "CanClusterVariant", "CanClusterConditional", "CanPhysicalChannel"],
+        "cancluster": ["CanCluster", "CanClusterVariant", "CanClusterConditional"],
         "cluster": ["CanCluster", "CanClusterVariant", "CanClusterConditional"],
         "baudrate": ["CanClusterConditional", "CanClusterVariant"],
         "frame": ["CanFrame", "CanFrameTriggering", "PduToFrameMapping"],
+        "canframe": ["CanFrame", "CanFrameTriggering"],
+        "triggering": ["CanFrameTriggering", "ISignalTriggering", "LinFrameTriggering"],
+
+        # =====================================================================
+        # CAN FD (Flexible Data-rate)
+        # =====================================================================
+        "canfd": ["CanCluster", "CanClusterVariant", "CanClusterConditional", "CanFrame"],
+        "can fd": ["CanCluster", "CanClusterVariant", "CanClusterConditional", "CanFrame"],
+        "flexible data": ["CanCluster", "CanClusterConditional"],
+        "fdbaudrate": ["CanClusterConditional"],
+
+        # =====================================================================
+        # LIN (Local Interconnect Network)
+        # =====================================================================
+        "lin": ["LinCluster", "LinClusterVariant", "LinClusterConditional", "LinPhysicalChannel"],
+        "lincluster": ["LinCluster", "LinClusterVariant", "LinClusterConditional"],
+        "linframe": ["LinFrame", "LinFrameTriggering", "LinUnconditionalFrame"],
+        "linmaster": ["LinMaster", "LinCommunicationController"],
+        "linslave": ["LinSlave", "LinCommunicationController"],
+        "linschedule": ["LinScheduleTable", "LinScheduleTableEntry"],
+        "schedule table": ["LinScheduleTable", "LinScheduleTableEntry"],
+        "master": ["LinMaster", "LinCommunicationController"],
+        "slave": ["LinSlave", "LinCommunicationController"],
+
+        # =====================================================================
+        # FlexRay
+        # =====================================================================
+        "flexray": ["FlexrayCluster", "FlexrayClusterVariant", "FlexrayPhysicalChannel"],
+        "flexraycluster": ["FlexrayCluster", "FlexrayClusterVariant", "FlexrayClusterConditional"],
+        "flexrayframe": ["FlexrayFrame", "FlexrayFrameTriggering"],
+
+        # =====================================================================
+        # Ethernet
+        # =====================================================================
+        "ethernet": ["EthernetCluster", "EthernetClusterVariant", "EthernetPhysicalChannel"],
+        "ethernetcluster": ["EthernetCluster", "EthernetClusterVariant"],
+        "socket": ["SocketAddress", "SocketConnection"],
+        "vlan": ["EthernetPhysicalChannel"],
+        "tcp": ["SocketAddress", "TcpIp"],
+        "udp": ["SocketAddress", "UdpNm"],
+
+        # =====================================================================
+        # SOME/IP (Service-Oriented Middleware over IP)
+        # =====================================================================
+        "someip": ["SomeipServiceInterfaceDeployment", "SomeipEventDeployment", "SomeipMethodDeployment"],
+        "some/ip": ["SomeipServiceInterfaceDeployment", "SomeipEventDeployment"],
+        "servicedeployment": ["SomeipServiceInterfaceDeployment", "SomeipEventDeployment"],
+        "eventdeployment": ["SomeipEventDeployment", "SomeipProvidedEventGroup"],
+        "methoddeployment": ["SomeipMethodDeployment"],
+        "eventgroup": ["SomeipProvidedEventGroup", "SomeipEventDeployment"],
+        "sd": ["SomeipSdClientServiceInstanceConfig", "SomeipSdServerServiceInstanceConfig"],
+
+        # =====================================================================
+        # Signal-to-Service Translation (COM to SOME/IP bridge)
+        # =====================================================================
+        "signalservice": ["SignalServiceTranslationEventProps", "SignalServiceTranslationProp"],
+        "signal service translation": ["SignalServiceTranslationEventProps", "SignalServiceTranslationProp"],
+        "translation": ["SignalServiceTranslationEventProps", "SignalServiceTranslationProp", "DataTransformation"],
+        "signaltranslation": ["SignalServiceTranslationEventProps", "SignalServiceTranslationProp"],
+        "com to someip": ["SignalServiceTranslationProps", "SignalServiceTranslationEventProps", "ISignalGroup"],
+        "comtosomeip": ["SignalServiceTranslationProps", "SignalServiceTranslationEventProps"],
+        "signal to service": ["SignalServiceTranslationEventProps", "SignalServiceTranslationProp"],
+
+        # =====================================================================
+        # Signals and PDUs (Common)
+        # =====================================================================
         "signal": ["ISignal", "ISignalIPdu", "ISignalToPduMapping", "SystemSignal"],
+        "isignal": ["ISignal", "ISignalIPdu", "ISignalToPduMapping"],
         "pdu": ["ISignalIPdu", "PduToFrameMapping", "ISignalToPduMapping"],
+        "systemsignal": ["SystemSignal", "SystemSignalGroup"],
+        "signalgroup": ["ISignalGroup", "SystemSignalGroup"],
+        "mapping": ["SystemMapping", "SenderReceiverToSignalMapping", "SwMapping", "ISignalToPduMapping"],
 
-        # ECU
+        # =====================================================================
+        # ECU and System
+        # =====================================================================
         "ecu": ["EcuInstance", "CanCommunicationController", "CommunicationConnector"],
-        "controller": ["CanCommunicationController", "CommunicationController"],
+        "controller": ["CanCommunicationController", "CommunicationController", "LinCommunicationController"],
+        "connector": ["CommunicationConnector", "CanCommunicationConnector", "LinCommunicationConnector"],
+        "system": ["System", "SystemMapping", "RootSoftwareComposition"],
 
-        # SWC
+        # =====================================================================
+        # SWC (Software Components)
+        # =====================================================================
         "component": ["ApplicationSwComponentType", "CompositionSwComponentType", "SwComponentPrototype"],
         "swc": ["ApplicationSwComponentType", "SwcInternalBehavior"],
+        "serviceswc": ["ServiceSwComponentType", "ServiceInterface"],
         "port": ["PPortPrototype", "RPortPrototype"],
         "interface": ["SenderReceiverInterface", "ClientServerInterface"],
         "behavior": ["SwcInternalBehavior", "RunnableEntity", "TimingEvent"],
@@ -440,29 +520,26 @@ class IntentParser:
         "connector": ["AssemblySwConnector", "DelegationSwConnector"],
         "composition": ["CompositionSwComponentType", "RootSoftwareComposition"],
 
-        # Data Types (comprehensive from example)
+        # =====================================================================
+        # Data Types
+        # =====================================================================
         "type": ["SwBaseType", "ImplementationDataType", "StdCppImplementationDataType"],
         "datatype": ["SwBaseType", "ImplementationDataType", "SwDataDefProps", "SwDataDefPropsVariant"],
         "basetype": ["SwBaseType", "BaseTypeDirectDefinition"],
         "uint8": ["SwBaseType", "ImplementationDataType"],
         "array": ["StdCppImplementationDataType"],
 
-        # Compu Methods (from example)
+        # =====================================================================
+        # Compu Methods and Constraints
+        # =====================================================================
         "compu": ["CompuMethod", "CompuInternalToPhys", "CompuScales", "CompuScale", "CompuConst"],
         "scale": ["CompuScale", "CompuScaleConstantContents", "CompuScaleRationalFormula"],
         "limit": ["LowerLimit", "UpperLimit"],
         "constraint": ["DataConstr", "DataConstrRule", "InternalConstrs"],
 
-        # System and Mapping (comprehensive)
-        "system": ["System", "SystemMapping", "RootSoftwareComposition"],
-        "mapping": ["SystemMapping", "SenderReceiverToSignalMapping", "SwMapping"],
-        "systemsignal": ["SystemSignal"],
-
-        # Ethernet
-        "ethernet": ["EthernetCluster", "EthernetPhysicalChannel"],
-        "someip": ["SomeipServiceInterfaceDeployment"],
-
+        # =====================================================================
         # Admin Data
+        # =====================================================================
         "admin": ["AdminData", "Sdg", "Sd"],
     }
 

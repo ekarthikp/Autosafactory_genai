@@ -89,15 +89,28 @@ autosarfactory.save()  # Save to original file
 
 
 class Generator:
-    def __init__(self, enable_deep_thinking=True):
+    def __init__(self, enable_deep_thinking=True, anti_hallucination_level="high"):
+        """
+        Initialize Generator with anti-hallucination controls.
+
+        Args:
+            enable_deep_thinking: Enable deep analysis phase
+            anti_hallucination_level: "low", "medium", "high" - controls how aggressive
+                                     hallucination prevention is
+        """
         self.model = get_llm_model()
         self.enable_deep_thinking = enable_deep_thinking
+        self.anti_hallucination_level = anti_hallucination_level
         self.last_thinking = None  # Store thinking for debugging
         self.codebase_kb = None
         try:
             self.codebase_kb = CodebaseKnowledgeBase()
         except Exception as e:
             print(f"Warning: Could not initialize Codebase Knowledge Base: {e}")
+
+        # Initialize anti-hallucination system
+        from src.anti_hallucination import get_anti_hallucination_system
+        self.anti_hallucination = get_anti_hallucination_system()
 
     def _deep_think(self, plan, output_file, is_edit_mode):
         """
@@ -300,7 +313,25 @@ RECOMMENDATIONS:
 
 """
         
-        # 6. Construct Prompt with patterns and examples
+        # 6. Build ANTI-HALLUCINATION protections
+        # 6.1 Get method whitelist (explicit allowed methods only)
+        method_whitelist = ""
+        if self.anti_hallucination_level in ["medium", "high"]:
+            print("   🛡️  Building method whitelist to prevent hallucinations...")
+            method_whitelist = self.anti_hallucination.build_method_whitelist(
+                list(expanded_classes)
+            )
+
+        # 6.2 Determine task complexity for temperature control
+        num_steps = len(plan.get('checklist', []))
+        if num_steps <= 5:
+            complexity = "simple"
+        elif num_steps <= 10:
+            complexity = "medium"
+        else:
+            complexity = "complex"
+
+        # 7. Construct Prompt with patterns and examples
         prompt = f"""
 You are an Expert AUTOSAR Code Generator.
 You must write a complete, executable Python script using the 'autosarfactory' library.
@@ -312,6 +343,9 @@ PLAN:
 {plan['checklist']}
 
 {thinking_section}
+
+{method_whitelist if method_whitelist else ''}
+
 {CRITICAL_API_HINTS}
 
 WORKING CODE PATTERNS (USE THESE AS REFERENCE):
@@ -389,7 +423,23 @@ CRITICAL INSTRUCTIONS:
 
 GENERATE THE COMPLETE PYTHON SCRIPT:
 """
-        print("   Generating code (this may take a moment)...")
+        # 8. Generate code with anti-hallucination controls
+        print(f"   Generating code with {self.anti_hallucination_level} hallucination prevention...")
+
+        # Get generation config (temperature control)
+        gen_config = self.anti_hallucination.get_generation_config(complexity)
+
+        # Apply generation config if supported by the model
+        try:
+            # Try to set generation config (works for Gemini, might not for others)
+            if hasattr(self.model, 'generation_config'):
+                self.model.generation_config.temperature = gen_config['temperature']
+                self.model.generation_config.top_p = gen_config['top_p']
+                self.model.generation_config.top_k = gen_config['top_k']
+                print(f"   🌡️  Temperature set to {gen_config['temperature']} (lower = less hallucinations)")
+        except Exception as e:
+            print(f"   Warning: Could not set generation config: {e}")
+
         response = self.model.generate_content(prompt)
 
         code = response.text
@@ -401,6 +451,16 @@ GENERATE THE COMPLETE PYTHON SCRIPT:
 
         # PRE-EXECUTION VALIDATION: Fix known API mistakes before execution
         code = self._validate_and_fix_api_calls(code.strip())
+
+        # STRUCTURAL VALIDATION: Check high-level code structure
+        if self.anti_hallucination_level in ["medium", "high"]:
+            struct_valid, struct_issues = self.anti_hallucination.verify_generated_code_structure(
+                code, plan
+            )
+            if not struct_valid:
+                print("   ⚠️  Structural issues detected:")
+                for issue in struct_issues[:3]:
+                    print(f"      - {issue}")
 
         # POST-FIX VALIDATION: Check if fixes resolved all issues
         from src.api_validator import get_api_validator

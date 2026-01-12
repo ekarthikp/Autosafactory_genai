@@ -37,6 +37,9 @@ from .error_feedback_manager import get_error_feedback_manager
 # API validation
 from .api_validator import APIValidator, get_api_validator
 
+# Anti-hallucination system
+from .anti_hallucination import AntiHallucinationSystem, get_anti_hallucination_system
+
 __all__ = [
     # Core classes
     'Planner',
@@ -60,4 +63,8 @@ __all__ = [
     # API validation
     'APIValidator',
     'get_api_validator',
+
+    # Anti-hallucination
+    'AntiHallucinationSystem',
+    'get_anti_hallucination_system',
 ]

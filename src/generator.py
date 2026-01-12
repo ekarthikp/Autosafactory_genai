@@ -653,8 +653,46 @@ GENERATE THE CORRECTED PYTHON SCRIPT:
                          "TypeRef", "RequiredInterfaceRef", "ProvidedInterfaceRef"],
 
             # Signal to Service Translation
-            "translation": ["SignalServiceTranslationProps", "SignalServiceTranslationEventProps", "SignalServiceTranslationControlEnum"],
+            "translation": ["SignalServiceTranslationProps", "SignalServiceTranslationEventProps",
+                          "SignalServiceTranslationControlEnum", "ServiceInstanceToSignalMapping"],
             "props": ["SignalServiceTranslationProps", "SignalServiceTranslationEventProps"],
+            "signal to service": ["SignalServiceTranslationProps", "ServiceInstanceToSignalMapping",
+                                 "SignalServiceTranslationEventProps"],
+            "service to signal": ["SignalServiceTranslationProps", "ServiceInstanceToSignalMapping"],
+
+            # LIN Protocol
+            "lin": ["LinCluster", "LinClusterConditional", "LinPhysicalChannel", "LinFrame",
+                   "LinUnconditionalFrame", "LinEventTriggeredFrame", "LinFrameTriggering",
+                   "LinMaster", "LinSlave", "LinScheduleTable"],
+            "lin cluster": ["LinCluster", "LinClusterConditional", "LinPhysicalChannel"],
+            "lin frame": ["LinFrame", "LinUnconditionalFrame", "LinEventTriggeredFrame", "LinFrameTriggering"],
+            "lin master": ["LinMaster", "LinMasterConditional"],
+            "lin slave": ["LinSlave", "LinSlaveConditional", "LinSlaveConfig"],
+            "schedule": ["LinScheduleTable"],
+
+            # Ethernet and SOME/IP
+            "ethernet": ["EthernetCluster", "EthernetClusterConditional", "EthernetPhysicalChannel",
+                        "EthernetFrame", "EthernetFrameTriggering", "EthernetCommunicationController"],
+            "ethernet cluster": ["EthernetCluster", "EthernetClusterConditional"],
+            "ethernet frame": ["EthernetFrame", "EthernetFrameTriggering"],
+            "someip": ["SomeipServiceInterface", "ProvidedSomeipServiceInstance", "RequiredSomeipServiceInstance",
+                      "SomeipServiceInterfaceDeployment", "SomeipEventDeployment", "SomeipEventGroup"],
+            "some/ip": ["SomeipServiceInterface", "ProvidedSomeipServiceInstance", "RequiredSomeipServiceInstance"],
+            "service interface": ["SomeipServiceInterface", "ServiceInterface", "SenderReceiverInterface"],
+            "service instance": ["ProvidedSomeipServiceInstance", "RequiredSomeipServiceInstance",
+                                "ConsumedServiceInstance", "ProvidedServiceInstance"],
+
+            # FlexRay Protocol
+            "flexray": ["FlexrayCluster", "FlexrayClusterConditional", "FlexrayPhysicalChannel",
+                       "FlexrayFrame", "FlexrayFrameTriggering"],
+            "flexray cluster": ["FlexrayCluster", "FlexrayClusterConditional"],
+            "flexray frame": ["FlexrayFrame", "FlexrayFrameTriggering"],
+
+            # CAN-FD
+            "canfd": ["CanControllerFdConfiguration", "CanControllerFdConfigurationRequirements"],
+            "can-fd": ["CanControllerFdConfiguration", "CanControllerFdConfigurationRequirements"],
+            "can fd": ["CanControllerFdConfiguration", "CanControllerFdConfigurationRequirements"],
+            "fd": ["CanControllerFdConfiguration"],
         }
 
         for key, cls_list in keywords.items():

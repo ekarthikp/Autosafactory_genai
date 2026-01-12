@@ -302,9 +302,35 @@ class APIValidator:
         # Identify relevant classes
         relevant_classes = set()
 
-        # Keyword-based class identification
+        # Keyword-based class identification (comprehensive protocol support)
         keyword_map = {
+            # CAN
             'can': ['CanCluster', 'CanClusterVariant', 'CanFrame', 'CanPhysicalChannel'],
+            'canfd': ['CanControllerFdConfiguration', 'CanControllerFdConfigurationRequirements'],
+            'can-fd': ['CanControllerFdConfiguration'],
+
+            # LIN
+            'lin': ['LinCluster', 'LinClusterConditional', 'LinPhysicalChannel', 'LinFrame',
+                   'LinUnconditionalFrame', 'LinMaster', 'LinSlave', 'LinScheduleTable'],
+
+            # Ethernet & SOME/IP
+            'ethernet': ['EthernetCluster', 'EthernetClusterConditional', 'EthernetPhysicalChannel',
+                        'EthernetFrame', 'EthernetFrameTriggering'],
+            'someip': ['SomeipServiceInterface', 'ProvidedSomeipServiceInstance',
+                      'RequiredSomeipServiceInstance', 'SomeipServiceInterfaceDeployment'],
+            'some/ip': ['SomeipServiceInterface', 'ProvidedSomeipServiceInstance'],
+
+            # FlexRay
+            'flexray': ['FlexrayCluster', 'FlexrayClusterConditional', 'FlexrayPhysicalChannel',
+                       'FlexrayFrame', 'FlexrayFrameTriggering'],
+
+            # Signal-to-Service Translation
+            'translation': ['SignalServiceTranslationProps', 'SignalServiceTranslationEventProps',
+                          'ServiceInstanceToSignalMapping'],
+            'signal to service': ['SignalServiceTranslationProps', 'ServiceInstanceToSignalMapping'],
+            'service to signal': ['SignalServiceTranslationProps', 'ServiceInstanceToSignalMapping'],
+
+            # Common Elements
             'signal': ['ISignal', 'ISignalIPdu', 'ISignalToPduMapping'],
             'component': ['ApplicationSwComponentType', 'SwcInternalBehavior'],
             'port': ['RPortPrototype', 'PPortPrototype'],

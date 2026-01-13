@@ -46,7 +46,31 @@ class ErrorFeedbackManager:
         if os.path.exists(self.feedback_file):
             try:
                 with open(self.feedback_file, 'r', encoding='utf-8') as f:
-                    self.feedback_data = json.load(f)
+                    loaded_data = json.load(f)
+
+                # Validate and merge with default structure
+                if not isinstance(loaded_data, dict):
+                    print("Warning: Loaded data is not a dictionary. Using default structure.")
+                    return
+
+                # Ensure 'errors' key exists and is a list
+                if 'errors' not in loaded_data or not isinstance(loaded_data['errors'], list):
+                    print("Warning: Missing or invalid 'errors' key. Initializing as empty list.")
+                    loaded_data['errors'] = []
+
+                # Ensure 'metadata' key exists and is a dict with all required fields
+                if 'metadata' not in loaded_data or not isinstance(loaded_data['metadata'], dict):
+                    print("Warning: Missing or invalid 'metadata' key. Using default metadata.")
+                    loaded_data['metadata'] = self.feedback_data['metadata'].copy()
+                else:
+                    # Merge with default metadata to ensure all required fields exist
+                    default_meta = self.feedback_data['metadata']
+                    for key, default_value in default_meta.items():
+                        if key not in loaded_data['metadata']:
+                            loaded_data['metadata'][key] = default_value
+
+                # Update feedback_data only after validation
+                self.feedback_data = loaded_data
                 print(f"Loaded {len(self.feedback_data['errors'])} error records from feedback file.")
             except Exception as e:
                 print(f"Warning: Could not load feedback file: {e}")
@@ -55,12 +79,21 @@ class ErrorFeedbackManager:
     def save_feedback(self):
         """Save feedback to JSON file."""
         try:
+            # Ensure metadata exists before updating
+            if "metadata" not in self.feedback_data or not isinstance(self.feedback_data["metadata"], dict):
+                self.feedback_data["metadata"] = {
+                    "total_errors": 0,
+                    "total_fixes_attempted": 0,
+                    "total_successful_fixes": 0,
+                    "last_updated": None
+                }
+
             # Update metadata
             self.feedback_data["metadata"]["last_updated"] = datetime.now().isoformat()
-            
+
             # Ensure directory exists
             os.makedirs(os.path.dirname(self.feedback_file) if os.path.dirname(self.feedback_file) else ".", exist_ok=True)
-            
+
             with open(self.feedback_file, 'w', encoding='utf-8') as f:
                 json.dump(self.feedback_data, f, indent=2, ensure_ascii=False)
         except Exception as e:
@@ -83,17 +116,30 @@ class ErrorFeedbackManager:
                 - fix_successful: Boolean indicating if fix worked
                 - traceback: Full traceback (optional)
         """
+        # Ensure errors list exists
+        if "errors" not in self.feedback_data or not isinstance(self.feedback_data["errors"], list):
+            self.feedback_data["errors"] = []
+
         # Add to errors list
         self.feedback_data["errors"].append(error_entry)
-        
+
+        # Ensure metadata exists and has required fields
+        if "metadata" not in self.feedback_data or not isinstance(self.feedback_data["metadata"], dict):
+            self.feedback_data["metadata"] = {
+                "total_errors": 0,
+                "total_fixes_attempted": 0,
+                "total_successful_fixes": 0,
+                "last_updated": None
+            }
+
         # Update metadata
         metadata = self.feedback_data["metadata"]
-        metadata["total_errors"] += 1
+        metadata["total_errors"] = metadata.get("total_errors", 0) + 1
         if error_entry.get("fix_applied"):
-            metadata["total_fixes_attempted"] += 1
+            metadata["total_fixes_attempted"] = metadata.get("total_fixes_attempted", 0) + 1
         if error_entry.get("fix_successful", False):
-            metadata["total_successful_fixes"] += 1
-        
+            metadata["total_successful_fixes"] = metadata.get("total_successful_fixes", 0) + 1
+
         # Save after each record (for persistence)
         self.save_feedback()
     
@@ -149,7 +195,7 @@ class ErrorFeedbackManager:
     def get_statistics(self) -> Dict:
         """
         Get aggregated statistics about errors and fixes.
-        
+
         Returns:
             Dictionary with statistics:
                 - total_errors
@@ -159,6 +205,19 @@ class ErrorFeedbackManager:
                 - error_types_breakdown
                 - common_errors (top 5)
         """
+        # Ensure metadata exists with default values
+        if "metadata" not in self.feedback_data or not isinstance(self.feedback_data["metadata"], dict):
+            self.feedback_data["metadata"] = {
+                "total_errors": 0,
+                "total_fixes_attempted": 0,
+                "total_successful_fixes": 0,
+                "last_updated": None
+            }
+
+        # Ensure errors list exists
+        if "errors" not in self.feedback_data or not isinstance(self.feedback_data["errors"], list):
+            self.feedback_data["errors"] = []
+
         metadata = self.feedback_data["metadata"]
         errors = self.feedback_data["errors"]
         

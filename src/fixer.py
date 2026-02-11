@@ -1,636 +1,170 @@
+"""
+Code Fixer - Tiered error correction for autosarfactory code.
+==============================================================
+Tier 1: Deterministic fixes from api_fixes (no LLM)
+Tier 2: Pattern-based regex fixes (no LLM)
+Tier 3: LLM-based fix (fallback)
+
+Uses the consolidated api_fixes module as single source of truth.
+"""
+
 import re
-import ast
 from typing import Tuple, List, Dict, Optional
-from dataclasses import dataclass
 from src.utils import get_llm_model
-from src.knowledge import inspect_class
-from src.patterns import CRITICAL_API_HINTS, get_minimal_example
-from src.knowledge_manager import KnowledgeManager
-
-# Import new components for symbol validation
-try:
-    from src.ast_indexer import get_symbol_table, SymbolTable
-    from src.code_graph import get_code_graph, CodeKnowledgeGraph
-    from src.constrained_generator import get_constrained_generator
-    SYMBOL_VALIDATION_AVAILABLE = True
-except ImportError:
-    SYMBOL_VALIDATION_AVAILABLE = False
-
-
-@dataclass
-class SymbolError:
-    """Represents a hallucinated or invalid symbol."""
-    symbol_name: str
-    error_type: str  # 'method', 'class', 'attribute'
-    context: str  # Where in the code it was found
-    line_number: Optional[int] = None
-    suggestion: Optional[str] = None
+from src.api_fixes import (
+    HALLUCINATION_FIXES, COMPACT_API_RULES,
+    apply_all_fixes, apply_hallucination_fixes, apply_pattern_fixes
+)
 
 
 class Fixer:
-    def __init__(self, max_attempts=5, enable_deep_analysis=True):
+    def __init__(self, max_attempts=5, enable_deep_analysis=False):
         self.model = get_llm_model()
-        self.previous_errors = []  # Track previous errors to detect repeated failures
+        self.previous_errors = []
         self.fix_attempts = 0
         self.max_attempts = max_attempts
-        self.enable_deep_analysis = enable_deep_analysis
-        
-        # Initialize symbol validation components
-        self.symbol_table: Optional[SymbolTable] = None
-        self.code_graph: Optional[CodeKnowledgeGraph] = None
-        
-        if SYMBOL_VALIDATION_AVAILABLE:
-            try:
-                self.symbol_table = get_symbol_table()
-                self.code_graph = get_code_graph()
-                print("Fixer: Symbol validation enabled")
-            except Exception as e:
-                print(f"Fixer: Symbol validation disabled ({e})")
-
-    def _extract_error_line(self, error_log):
-        """Extract the line number from the error traceback."""
-        # Look for patterns like "line 24" or "line 73"
-        match = re.search(r'line (\d+)', error_log)
-        if match:
-            return int(match.group(1))
-        return None
-
-    def _is_repeated_error(self, error_log):
-        """Check if we're seeing the same error repeatedly."""
-        # Extract key error info
-        error_key = error_log[:200] if len(error_log) > 200 else error_log
-        if error_key in self.previous_errors:
-            return True
-        self.previous_errors.append(error_key)
-        return False
-
-    def _extract_relevant_classes_from_error(self, error_log, code):
-        """
-        Extract class names mentioned in error or code to provide targeted API help.
-        """
-        classes = set()
-        # Common classes that often cause errors
-        error_indicators = {
-            "CanCluster": ["CanCluster", "CanClusterVariant", "CanClusterConditional", "CanClusterConfig"],
-            "baudrate": ["CanClusterConditional", "CanClusterConfig"],
-            "CanFrame": ["CanFrame", "CanFrameTriggering", "FrameRef"],
-            "ISignal": ["ISignal", "ISignalIPdu", "ISignalToPduMapping", "ISignalRef"],
-            "Pdu": ["ISignalIPdu", "PduToFrameMapping", "PduRef"],
-            "set_frame": ["CanFrameTriggering", "FrameRef"],
-            "set_iSignal": ["ISignalToPduMapping", "ISignalRef"],
-            "set_pdu": ["PduToFrameMapping", "PduRef"],
-            "SwBaseType": ["SwBaseType", "BaseTypeDirectDefinition"],
-            "ImplementationDataType": ["ImplementationDataType", "SwDataDefProps", "SwDataDefPropsVariant"],
-            "Interface": ["SenderReceiverInterface", "DataElement"],
-            "Port": ["PPortPrototype", "RPortPrototype", "RequiredInterfaceRef", "ProvidedInterfaceRef"],
-            "Behavior": ["SwcInternalBehavior", "RunnableEntity"],
-            "DataReadAccess": ["RunnableEntity", "DataReadAcces"],  # Note spelling
-            "DataWriteAccess": ["RunnableEntity", "DataWriteAcces"],  # Note spelling
-        }
-
-        combined_text = error_log + " " + code
-        for indicator, cls_list in error_indicators.items():
-            if indicator.lower() in combined_text.lower():
-                classes.update(cls_list)
-
-        return list(classes)
-    
-    def _deep_analyze_error(self, code, error_info, plan):
-        """
-        Deep analysis of error before attempting fix.
-        Uses error feedback to find similar past errors and successful fixes.
-        
-        Args:
-            code: The failing code
-            error_info: Structured error information (dict or string)
-            plan: The execution plan
-            
-        Returns:
-            Dictionary with analysis insights
-        """
-        from src.error_feedback_manager import get_error_feedback_manager
-        efm = get_error_feedback_manager()
-        
-        # Extract error message
-        if isinstance(error_info, dict):
-            error_message = error_info.get('message', str(error_info))
-            error_type = error_info.get('type', 'Unknown')
-        else:
-            error_message = str(error_info)
-            error_type = 'Unknown'
-        
-        # Find similar past errors
-        similar_errors = efm.get_similar_errors(error_message, limit=3)
-        
-        # Get fix suggestions
-        fix_suggestions = efm.get_fix_suggestions(error_type, error_message)
-        
-        # Build analysis
-        analysis = {
-            "error_type": error_type,
-            "similar_errors_found": len(similar_errors),
-            "past_successful_fixes": fix_suggestions,
-            "success_rate_for_type": efm.get_success_rate_for_error_type(error_type)
-        }
-        
-        return analysis
 
     def fix_code(self, code, error_log, plan):
         """
-        Fixes the code based on the error log.
-        OPTIMIZED: Uses tiered fixing strategy to minimize LLM calls.
-        Tier 1: Deterministic fixes (NO LLM)
-        Tier 2: Pattern-based fixes (NO LLM)
-        Tier 3: LLM fix (only if tiers 1-2 fail)
+        Fix code using tiered strategy: deterministic -> pattern -> LLM.
         """
         self.fix_attempts += 1
-        
-        # Check max attempts
+
         if self.fix_attempts > self.max_attempts:
-            print(f"   ⚠️  Max fix attempts ({self.max_attempts}) reached.")
-            return code  # Return code as-is
-        
-        # Extract error text for processing (handle both dict and string)
+            print(f"   Max fix attempts ({self.max_attempts}) reached.")
+            return code
+
+        # Extract error text
         if isinstance(error_log, dict):
             error_text = error_log.get('traceback', '') + ' ' + error_log.get('message', '')
-            error_type = error_log.get('type', '')
-            error_message = error_log.get('message', '')
+            error_msg = error_log.get('message', '')
         else:
             error_text = str(error_log)
-            error_type = ''
-            error_message = str(error_log)
-        
+            error_msg = str(error_log)
+
         # === TIER 1: Deterministic fixes (NO LLM) ===
-        print(f"   🔧 Tier 1: Trying deterministic fixes...")
-        fixed_code = self._apply_deterministic_fixes(code, error_message, error_type)
-        if fixed_code != code:
-            print(f"   ✅ Tier 1 fix applied!")
-            return fixed_code
-        
-        # === TIER 2: Pattern-based fixes (NO LLM) ===
-        print(f"   🔧 Tier 2: Trying pattern-based fixes...")
-        fixed_code = self._apply_pattern_fixes(code, error_message)
-        if fixed_code != code:
-            print(f"   ✅ Tier 2 fix applied!")
-            return fixed_code
-        
+        print(f"   Tier 1: Deterministic fixes...")
+        fixed, fixes = apply_all_fixes(code)
+        if fixed != code:
+            print(f"   Tier 1 applied {len(fixes)} fixes")
+            return fixed
+
+        # === TIER 2: Error-specific deterministic fixes ===
+        print(f"   Tier 2: Error-specific fixes...")
+        fixed = self._fix_from_error(code, error_msg)
+        if fixed != code:
+            print(f"   Tier 2 fix applied!")
+            return fixed
+
         # === TIER 3: LLM fix (fallback) ===
-        print(f"   🤖 Tier 3: Using LLM to fix (attempt {self.fix_attempts})...")
-        
-        # Deep analysis of the error (if enabled)
-        analysis = None
-        if self.enable_deep_analysis:
-            analysis = self._deep_analyze_error(code, error_log, plan)
-            if analysis.get('past_successful_fixes'):
-                print(f"   💡 Found {len(analysis['past_successful_fixes'])} similar past fixes")
+        print(f"   Tier 3: LLM fix (attempt {self.fix_attempts})...")
+        return self._llm_fix(code, error_text, plan)
 
-        # Check if we're seeing repeated errors
-        is_repeated = self._is_repeated_error(error_text)
-        error_line = self._extract_error_line(error_text)
+    def _fix_from_error(self, code: str, error_msg: str) -> str:
+        """Apply targeted fix based on error message."""
+        # AttributeError: 'X' has no attribute 'Y'
+        attr_match = re.search(r"has no attribute '(\w+)'", error_msg)
+        if attr_match:
+            bad_method = attr_match.group(1)
+            if bad_method in HALLUCINATION_FIXES:
+                return code.replace(bad_method, HALLUCINATION_FIXES[bad_method])
 
-        additional_instructions = ""
+            # Try to find similar method via API index
+            try:
+                from src.api_index import get_api_index
+                idx = get_api_index()
+                similar = idx.find_similar_method(bad_method)
+                if similar:
+                    print(f"      Suggesting: {bad_method} -> {similar[0]}")
+                    return code.replace(bad_method, similar[0])
+            except Exception:
+                pass
+
+        # TypeError: argument must be a list
+        if "must be a list" in error_msg and "read" in error_msg:
+            code = re.sub(
+                r'autosarfactory\.read\(([^)\[\]]+)\)',
+                lambda m: f'autosarfactory.read([{m.group(1).strip()}])',
+                code
+            )
+            return code
+
+        return code
+
+    def _llm_fix(self, code: str, error_text: str, plan: dict) -> str:
+        """Use LLM to fix code that couldn't be fixed deterministically."""
+        is_repeated = error_text[:200] in self.previous_errors
+        self.previous_errors.append(error_text[:200])
+
+        extra = ""
         if is_repeated:
-            additional_instructions = f"""
-IMPORTANT: This is a REPEATED error. The previous fix attempt did not work.
-If you cannot fix line {error_line if error_line else 'the problematic'} after this attempt,
-COMMENT OUT the problematic code section with:
-# TODO: Could not fix - <brief description of what was attempted>
-# <original code here>
-
-This allows the rest of the script to run and generate partial output.
-"""
+            extra = "\nThis is a REPEATED error. The previous fix didn't work. Try a different approach or comment out the failing code."
         elif self.fix_attempts >= 3:
-            additional_instructions = """
-IMPORTANT: Multiple fix attempts have been made. If the error persists on specific lines,
-consider COMMENTING OUT the problematic code sections to allow partial generation.
-Add a TODO comment explaining what could not be implemented.
-"""
-        
-        # Add analysis insights to instructions
-        if analysis and analysis.get('past_successful_fixes'):
-            additional_instructions += f"""
+            extra = "\nMultiple fix attempts failed. Comment out unfixable sections with TODO comments."
 
-PAST SUCCESSFUL FIXES FOR SIMILAR ERRORS:
-{chr(10).join('- ' + f for f in analysis['past_successful_fixes'])}
+        prompt = f"""Fix this autosarfactory Python code.
 
-Apply similar strategies if applicable.
-"""
+ERROR:
+{error_text[:1500]}
 
-        prompt = f"""
-You are an Expert Python Debugger for AUTOSAR code using the 'autosarfactory' library.
+{COMPACT_API_RULES}
 
-The following code failed to execute or verify. Your job is to fix it.
+PLAN: {plan.get('checklist', '')}
 
-FAILED CODE:
+CODE:
 ```python
 {code}
 ```
+{extra}
+Return ONLY the fixed Python code:"""
 
-ERROR LOG:
-{error_text}
-
-ORIGINAL PLAN:
-{plan['checklist']}
-
-{CRITICAL_API_HINTS}
-
-{additional_instructions}
-
-FIXED PYTHON SCRIPT:
-"""
-        
         try:
-            # Internal retry loop to force changes
-            for internal_attempt in range(2):
-                response = self.model.generate_content(prompt)
-                fixed_code = response.text
+            response = self.model.generate_content(prompt)
+            fixed = response.text
+            if "```python" in fixed:
+                fixed = fixed.split("```python")[1].split("```")[0]
+            elif "```" in fixed:
+                fixed = fixed.split("```")[1].split("```")[0]
+            fixed = fixed.strip()
 
-                if "```python" in fixed_code:
-                    fixed_code = fixed_code.split("```python")[1].split("```")[0]
-                elif "```" in fixed_code:
-                    fixed_code = fixed_code.split("```")[1].split("```")[0]
-                
-                fixed_code = fixed_code.strip()
-                
-                if fixed_code != code:
-                    return fixed_code
-                
-                print(f"   ⚠️ Fixer returned identical code (internal attempt {internal_attempt + 1}). Retrying with stronger prompt...")
-                prompt += "\n\nCRITICAL: You returned the EXACT SAME code as before. You MUST make changes to fix the error. If you cannot fix it, comment out the failing lines."
+            # Apply deterministic fixes on top of LLM fix
+            fixed, _ = apply_all_fixes(fixed)
 
-            return fixed_code
-
+            return fixed if fixed != code else code
         except Exception as e:
-            print(f"   ❌ Fixer LLM call failed: {e}")
-            return code # Return original code on failure
+            print(f"   LLM fix failed: {e}")
+            return code
 
-    def _apply_deterministic_fixes(self, code: str, error_message: str, error_type: str) -> str:
-        """
-        Apply known deterministic fixes based on error patterns.
-        These are common API mistakes that can be fixed without LLM calls.
-        """
-        # Map of error patterns to (old_string, new_string) fixes
-        error_fixes = {
-            # Method name mistakes
-            "has no attribute 'new_SwcInternalBehavior'": 
-                ('new_SwcInternalBehavior', 'new_InternalBehavior'),
-            "has no attribute 'new_RunnableEntity'":
-                ('new_RunnableEntity', 'new_Runnable'),
-            "has no attribute 'new_DataReadAccess'":
-                ('new_DataReadAccess', 'new_DataReadAcces'),
-            "has no attribute 'new_DataWriteAccess'":
-                ('new_DataWriteAccess', 'new_DataWriteAcces'),
-            "has no attribute 'new_VariableDataPrototype'":
-                ('new_VariableDataPrototype', 'new_DataElement'),
-            "has no attribute 'new_ServiceEvent'":
-                ('new_ServiceEvent', 'new_Event'),
-            "has no attribute 'new_SwComponentPrototype'":
-                ('new_SwComponentPrototype', 'new_Component'),
-            "has no attribute 'new_ComponentPrototype'":
-                ('new_ComponentPrototype', 'new_Component'),
-            # SOME/IP naming (lowercase 'p')
-            "has no attribute 'new_SomeIpServiceInterfaceDeployment'":
-                ('new_SomeIpServiceInterfaceDeployment', 'new_SomeipServiceInterfaceDeployment'),
-            "has no attribute 'new_SomeIpEventDeployment'":
-                ('new_SomeIpEventDeployment', 'new_SomeipEventDeployment'),
-            # Reference pattern mistakes
-            "has no attribute 'set_value'":
-                None,  # Special handling needed
-        }
-        
-        for error_pattern, fix in error_fixes.items():
-            if error_pattern in error_message and fix:
-                old, new = fix
-                if old in code:
-                    return code.replace(old, new)
-        
-        return code
-
-    def _apply_pattern_fixes(self, code: str, error_message: str) -> str:
-        """
-        Apply regex-based pattern fixes for more complex issues.
-        """
-        import re
-        
-        # Fix common reference patterns: new_*Ref() -> set_*()
-        # This pattern catches things like ".new_FrameRef().set_value(frame)"
-        # and replaces with ".set_frame(frame)"
-        ref_pattern = r'\.new_(\w+)Ref\(\)\.set_value\((\w+)\)'
-        def ref_replacement(match):
-            ref_type = match.group(1)
-            value = match.group(2)
-            # Convert CamelCase to lowercase for setter
-            setter_name = ref_type[0].lower() + ref_type[1:]
-            return f'.set_{setter_name}({value})'
-        
-        fixed = re.sub(ref_pattern, ref_replacement, code)
-        if fixed != code:
-            return fixed
-        
-        # Fix ByteOrder string usage
-        byte_order_patterns = [
-            (r'set_packingByteOrder\(["\']MOST-SIGNIFICANT-BYTE-LAST["\']\)',
-             'set_packingByteOrder(autosarfactory.ByteOrderEnum.VALUE_MOST_SIGNIFICANT_BYTE_LAST)'),
-            (r'set_packingByteOrder\(["\']MOST-SIGNIFICANT-BYTE-FIRST["\']\)',
-             'set_packingByteOrder(autosarfactory.ByteOrderEnum.VALUE_MOST_SIGNIFICANT_BYTE_FIRST)'),
-        ]
-        
-        for pattern, replacement in byte_order_patterns:
-            fixed = re.sub(pattern, replacement, code)
-            if fixed != code:
-                return fixed
-        
-        # Fix save() with arguments (incorrect signature)
-        save_pattern = r'autosarfactory\.save\([^)]+\)'
-        if re.search(save_pattern, code):
-            fixed = re.sub(save_pattern, 'autosarfactory.save()', code)
-            if fixed != code:
-                return fixed
-        
-        return code
-    
-    def _apply_proactive_fixes(self, code: str) -> str:
-        """
-        Apply all known hallucination pattern fixes proactively.
-        This runs BEFORE AST validation to fix common LLM mistakes.
-        """
-        import re
-        
-        # Known hallucinated methods -> correct methods
-        method_fixes = {
-            # Behavior methods
-            'new_SwcInternalBehavior': 'new_InternalBehavior',
-            'new_RunnableEntity': 'new_Runnable',
-            # Access methods (note the spelling without 's')
-            'new_DataReadAccess': 'new_DataReadAcces',
-            'new_DataWriteAccess': 'new_DataWriteAcces',
-            # Data elements
-            'new_VariableDataPrototype': 'new_DataElement',
-            # Events
-            'new_ServiceEvent': 'new_Event',
-            # IPdu (Common hallucination)
-            'new_IPdu': 'new_ISignalIPdu',
-            # Import errors
-            'from Autosarfactory import': 'from autosarfactory import',
-            'import Autosarfactory': 'import autosarfactory',
-            # Components
-            'new_SwComponentPrototype': 'new_Component',
-            'new_ComponentPrototype': 'new_Component',
-            # SOME/IP (lowercase 'p')
-            'new_SomeIpServiceInterfaceDeployment': 'new_SomeipServiceInterfaceDeployment',
-            'new_SomeIpEventDeployment': 'new_SomeipEventDeployment',
-            'new_SomeIpMethodDeployment': 'new_SomeipMethodDeployment',
-            'new_SomeIpFieldDeployment': 'new_SomeipFieldDeployment',
-            'new_SomeIpClientServerInterfaceDeployment': 'new_SomeipServiceInterfaceDeployment',
-            # Common CAN mistakes
-            'new_CanCommunicationController': 'new_CommunicationController',
-            'new_CanFramePort': 'new_FramePort',
-            'new_CanFrameTriggering': 'new_CanFrameTriggering',  # This is correct, but check context
-            # Timing
-            'new_TimerEvent': 'new_TimingEvent',
-            # Ports
-            'new_ReceiverPort': 'new_RPortPrototype',
-            'new_ProviderPort': 'new_PPortPrototype',
-            'new_RequiredPort': 'new_RPortPrototype',
-            'new_ProvidedPort': 'new_PPortPrototype',
-            # Interfaces
-            'new_SenderReceiverInterfaceRef': 'set_providedInterface',  # Pattern fix
-            'new_DataTypeMappingSet': 'new_DataTypeMappingSet',  # Verify exists
-            # ECU Mapping (CRITICAL - new_SwcToEcuMapping doesn't exist!)
-            'new_SwcToEcuMapping': 'new_SwMapping',  # Returns SwcToEcuMapping!
-            'new_SoftwareComponentToEcuMapping': 'new_SwMapping',
-            # Variable/Data prototype references (COMMON MISTAKE!)
-            # NOTE: Different classes have different methods:
-            # - VariableInAtomicSWCTypeInstanceRef uses set_targetDataPrototype
-            # - RVariableInAtomicSwcInstanceRef uses set_targetDataElement  
-            # Only fix the clearly wrong ones:
-            'set_variableDataPrototype': 'set_targetDataPrototype',  # Most common case
-            'set_dataPrototype': 'set_targetDataPrototype',
-            'set_variablePrototype': 'set_targetDataPrototype',
-            # Port references
-            'set_port': 'set_portPrototype',
-            # Type references
-            'set_typeRef': 'set_type',
-            'set_dataType': 'set_type',
-            'set_implementationType': 'set_type',
-            # Interface references
-            'set_interface': 'set_requiredInterface',  # or providedInterface depending on port type
-            'set_interfaceRef': 'set_requiredInterface',
-        }
-        
-        for wrong, correct in method_fixes.items():
-            if wrong in code:
-                code = code.replace(wrong, correct)
-                print(f"   🔧 Proactive fix: {wrong} → {correct}")
-        
-        # Fix reference patterns: new_*Ref().set_value(x) → set_*(x)
-        ref_pattern = r'\.new_(\w+)Ref\(\)\.set_value\(([^)]+)\)'
-        def ref_fix(match):
-            ref_type = match.group(1)
-            value = match.group(2)
-            setter_name = ref_type[0].lower() + ref_type[1:]
-            return f'.set_{setter_name}({value})'
-        
-        code = re.sub(ref_pattern, ref_fix, code)
-        
-        # Fix save() with arguments
-        code = re.sub(r'autosarfactory\.save\([^)]+\)', 'autosarfactory.save()', code)
-        
-        # Fix ByteOrder string literals
-        code = re.sub(
-            r'set_packingByteOrder\(["\']MOST-SIGNIFICANT-BYTE-LAST["\']\)',
-            'set_packingByteOrder(autosarfactory.ByteOrderEnum.VALUE_MOST_SIGNIFICANT_BYTE_LAST)',
-            code
-        )
-        code = re.sub(
-            r'set_packingByteOrder\(["\']MOST-SIGNIFICANT-BYTE-FIRST["\']\)',
-            'set_packingByteOrder(autosarfactory.ByteOrderEnum.VALUE_MOST_SIGNIFICANT_BYTE_FIRST)',
-            code
-        )
-        
-        return code
-    
-    # ========================================================================
-    # NEW: Pre-execution Symbol Validation (Reflexion Pattern)
-    # ========================================================================
-    
-    def validate_before_execution(self, code: str, depth: int = 0) -> Tuple[bool, str, List[SymbolError]]:
-        """
-        Validate code BEFORE execution by parsing AST and checking symbols.
-        This is the reflexion pattern - catch errors before they happen.
-        
-        Args:
-            code: The generated Python code
-            depth: Recursion depth to prevent infinite loops
-            
-        Returns:
-            Tuple of (is_valid, fixed_code, errors)
-        """
-        if depth > 3:
-            return True, code, []  # Stop recursion
-            
-        if not SYMBOL_VALIDATION_AVAILABLE or self.symbol_table is None:
-            return True, code, []  # Skip validation if not available
-        
-        # 0. PROACTIVE FIXES - Apply known hallucination patterns first
-        # Only apply on first pass to avoid cycling
-        if depth == 0:
-            code = self._apply_proactive_fixes(code)
-        
-        errors = []
-        
-        # 1. Parse the code
-        try:
-            tree = ast.parse(code)
-        except SyntaxError as e:
-            errors.append(SymbolError(
-                symbol_name="",
-                error_type="syntax",
-                context=str(e),
-                line_number=e.lineno
-            ))
-            return False, code, errors
-        
-        # 2. Find all method calls and validate them
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call):
-                symbol_errors = self._validate_call_node(node)
-                errors.extend(symbol_errors)
-        
-        # 3. If errors found, try to auto-fix
-        if errors:
-            fixed_code = self._apply_symbol_fixes(code, errors)
-            
-            # Check if fixes resolved all issues
-            if fixed_code != code:
-                # Re-validate the fixed code
-                is_valid, _, remaining_errors = self.validate_before_execution(fixed_code, depth + 1)
-                if is_valid or len(remaining_errors) < len(errors):
-                    return is_valid, fixed_code, remaining_errors
-            
-            return False, code, errors
-        
-        return True, code, []
-    
-    def _validate_call_node(self, node: ast.Call) -> List[SymbolError]:
-        """Validate a function/method call AST node."""
-        errors = []
-        
-        # Extract method name
-        method_name = None
-        class_context = None
-        
-        if isinstance(node.func, ast.Attribute):
-            method_name = node.func.attr
-            
-            # Try to determine the class context
-            if isinstance(node.func.value, ast.Name):
-                # Direct call like: autosarfactory.new_file(...)
-                class_context = node.func.value.id
-            elif isinstance(node.func.value, ast.Attribute):
-                # Chained call - harder to determine context
-                pass
-        
-        if method_name is None:
-            return errors
-        
-        # Check if this is an autosarfactory method call
-        if method_name.startswith(('new_', 'set_', 'get_')):
-            # Validate against symbol table
-            if not self.symbol_table.has_method(method_name):
-                # Find similar methods
-                suggestions = self.symbol_table.find_similar_method(method_name, limit=3)
-                
-                errors.append(SymbolError(
-                    symbol_name=method_name,
-                    error_type="method",
-                    context=f"Method call in code",
-                    line_number=node.lineno if hasattr(node, 'lineno') else None,
-                    suggestion=suggestions[0] if suggestions else None
-                ))
-        
-        return errors
-    
-    def _apply_symbol_fixes(self, code: str, errors: List[SymbolError]) -> str:
-        """Apply automatic fixes for symbol errors."""
-        fixed_code = code
-        
-        for error in errors:
-            if error.error_type == "method" and error.suggestion:
-                # Replace the hallucinated method with the suggested one
-                fixed_code = fixed_code.replace(error.symbol_name, error.suggestion)
-                print(f"   🔧 Auto-fixed: {error.symbol_name} → {error.suggestion}")
-        
-        return fixed_code
-    
-    def _check_abstract_instantiation(self, code: str) -> List[SymbolError]:
-        """Check if code tries to instantiate abstract classes."""
-        errors = []
-        
-        if not SYMBOL_VALIDATION_AVAILABLE or self.symbol_table is None:
-            return errors
-        
-        try:
-            tree = ast.parse(code)
-        except SyntaxError:
-            return errors
-        
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call):
-                # Check for direct class instantiation
-                if isinstance(node.func, ast.Name):
-                    class_name = node.func.id
-                    
-                    if class_name in self.symbol_table.classes:
-                        class_info = self.symbol_table.classes[class_name]
-                        if class_info.is_abstract:
-                            errors.append(SymbolError(
-                                symbol_name=class_name,
-                                error_type="abstract",
-                                context=f"Cannot instantiate abstract class",
-                                line_number=node.lineno if hasattr(node, 'lineno') else None,
-                                suggestion="Use a factory method instead"
-                            ))
-        
-        return errors
-    
     def validate_and_fix(self, code: str, plan: dict) -> Tuple[str, List[str]]:
         """
-        Complete validation and fixing pipeline (hybrid approach).
-        
-        1. Pre-execution validation (AST + symbol table)
-        2. Auto-fix what can be fixed
-        3. Report remaining issues
-        
-        Args:
-            code: Generated code
-            plan: Execution plan for context
-            
-        Returns:
-            Tuple of (potentially_fixed_code, list_of_remaining_issues)
+        Complete validation + fixing pipeline.
+        Returns (fixed_code, list_of_issues).
         """
         issues = []
-        
-        # Step 1: Pre-execution symbol validation
-        is_valid, fixed_code, symbol_errors = self.validate_before_execution(code)
-        
-        if symbol_errors:
-            for error in symbol_errors:
-                if error.suggestion:
-                    issues.append(f"Fixed: {error.symbol_name} → {error.suggestion}")
-                else:
-                    issues.append(f"Error on line {error.line_number}: {error.symbol_name} ({error.error_type})")
-        
-        # Step 2: Check for abstract class instantiation
-        abstract_errors = self._check_abstract_instantiation(fixed_code)
-        for error in abstract_errors:
-            issues.append(f"Abstract class instantiation: {error.symbol_name}")
-        
-        # Step 3: Apply deterministic pattern fixes
-        pattern_fixed = self._apply_pattern_fixes(fixed_code, "")
-        if pattern_fixed != fixed_code:
-            issues.append("Applied pattern fixes (reference patterns, byte order, etc.)")
-            fixed_code = pattern_fixed
-        
-        return fixed_code, issues
 
+        # Apply all deterministic fixes
+        fixed, fixes = apply_all_fixes(code)
+        issues.extend(fixes)
+
+        # Validate method existence via API index
+        try:
+            from src.api_index import get_api_index
+            import ast
+            idx = get_api_index()
+            tree = ast.parse(fixed)
+
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                    method = node.func.attr
+                    if method.startswith(('new_', 'set_', 'get_')):
+                        if not idx.method_exists(method):
+                            similar = idx.find_similar_method(method)
+                            if similar:
+                                fixed = fixed.replace(method, similar[0])
+                                issues.append(f"Fixed: {method} -> {similar[0]}")
+                            else:
+                                issues.append(f"Unknown method: {method}")
+        except Exception:
+            pass
+
+        return fixed, issues

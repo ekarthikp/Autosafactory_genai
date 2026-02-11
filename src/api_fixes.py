@@ -104,10 +104,15 @@ def apply_pattern_fixes(code: str) -> Tuple[str, List[str]]:
         fixes.append("Fixed new_*Ref().set_value() -> set_*()")
         code = new_code
 
-    # Fix save() with arguments
-    if re.search(r'autosarfactory\.save\([^)]+\)', code):
-        code = re.sub(r'autosarfactory\.save\([^)]+\)', 'autosarfactory.save()', code)
-        fixes.append("Fixed save() signature")
+    # Fix save() with non-list arguments (save() accepts optional list of filenames)
+    save_match = re.search(r'autosarfactory\.save\(([^)]+)\)', code)
+    if save_match:
+        arg = save_match.group(1).strip()
+        # Only fix if NOT a list arg and NOT a variable - e.g. save(root) or save("file.arxml")
+        if not arg.startswith('[') and not arg.startswith('status') and '"' in arg and ',' not in arg:
+            # Wrap single filename in list: save("file.arxml") -> save(["file.arxml"])
+            code = code.replace(save_match.group(0), f'autosarfactory.save([{arg}])')
+            fixes.append("Fixed save() single arg to list")
 
     # Fix ByteOrder string literals -> enum
     byte_order_fixes = [
@@ -151,10 +156,11 @@ def apply_all_fixes(code: str) -> Tuple[str, List[str]]:
 # ============================================================================
 
 COMPACT_API_RULES = """CRITICAL API RULES:
-1. IMPORT: import autosarfactory.autosarfactory as autosarfactory
+1. IMPORT: from autosarfactory import autosarfactory  # or: import autosarfactory.autosarfactory as autosarfactory
 2. CREATE: root_pkg = autosarfactory.new_file("out.arxml", defaultArPackage="Root", overWrite=True)
 3. READ: root, status = autosarfactory.read(["file.arxml"])  # LIST arg, returns TUPLE
-4. SAVE: autosarfactory.save()  # NO arguments
+4. SAVE: autosarfactory.save()  # saves ALL files; or save(["specific.arxml"])
+   saveAs: autosarfactory.saveAs("merged.arxml", overWrite=True)  # merge all into one
 5. REFERENCES USE DIRECT SETTERS - NEVER use new_*Ref().set_value():
    port.set_providedInterface(iface), port.set_requiredInterface(iface)
    frame_trig.set_frame(frame), sig_map.set_iSignal(signal), pdu_map.set_pdu(pdu)
@@ -172,8 +178,13 @@ COMPACT_API_RULES = """CRITICAL API RULES:
 8. BYTE ORDER: autosarfactory.ByteOrderEnum.VALUE_MOST_SIGNIFICANT_BYTE_LAST (not string)
 9. PDU-TO-FRAME MAPPING: create on FRAME object, not channel
 10. FRAME TRIGGERING: create on CHANNEL: channel.new_CanFrameTriggering(name)
-11. NAVIGATE: root.get_arPackages(), pkg.get_elements() - iterate, don't use get_*ByName()
+11. NAVIGATE: root.get_arPackages(), pkg.get_elements(), autosarfactory.get_node('/Path/Name')
 12. SOMEIP: lowercase 'p' -> new_SomeipServiceInterfaceDeployment
+13. CHAINING: deep nesting is valid - compu.new_CompuInternalToPhys().new_CompuScales().new_CompuScale()
+14. NO-NAME ELEMENTS: some new_* take no name arg: new_SwDataDefProps(), new_CompuScales(), new_BaseTypeDirectDefinition()
+15. SET TO NONE to unset: runnable.set_symbol(None), event.set_startOnEvent(None)
+16. MULTI-REF: use add_*/remove_* for multi-value refs: mapping.add_contextComponent(proto)
+17. ALT CREATION: obj = autosarfactory.TypeName(); obj.set_shortName('n'); parent.add_element(obj)
 """
 
 COMPACT_PATTERNS = {
@@ -258,13 +269,40 @@ req.set_targetRPort(r_port)""",
     "edit_mode": """# Edit existing file
 root, status = autosarfactory.read(["existing.arxml"])
 if not status: raise Exception("Failed to load")
-# Navigate by iterating
+# Navigate by path or iterating
+node = autosarfactory.get_node('/PkgName/ElementName')
 for pkg in root.get_arPackages():
     for elem in pkg.get_elements():
         if type(elem).__name__ == "ApplicationSwComponentType":
             swc = elem
-# Modify
+# Modify, then save
 autosarfactory.save()""",
+
+    "compu_method": """# CompuMethod with linear formula
+compu = pkg.new_CompuMethod("CM_Speed")
+compu.set_category("LINEAR")
+# Chain deeply nested elements
+coeffs = compu.new_CompuInternalToPhys().new_CompuScales().new_CompuScale().new_CompuScaleRationalFormula().new_CompuRationalCoeffs()
+coeffs.new_CompuNumerator().new_V().set_value(1.0)
+coeffs.new_CompuDenominator().new_V().set_value(1.0)""",
+
+    "data_constr": """# DataConstr with limits
+dc = pkg.new_DataConstr("DC_Speed")
+rule = dc.new_DataConstrRule()
+phys = rule.new_PhysConstrs()
+phys.set_lowerLimit(0)
+phys.set_upperLimit(255)
+phys.set_lowerLimitType(autosarfactory.IntervalTypeEnum.VALUE_CLOSED)
+phys.set_upperLimitType(autosarfactory.IntervalTypeEnum.VALUE_CLOSED)""",
+
+    "system_mapping": """# System with mapping
+sys = pkg.new_System("Sys")
+mapping = sys.new_Mapping("Map")
+root_comp = sys.new_RootSoftwareComposition("RootSwComp")
+root_comp.set_softwareComposition(composition)
+swc_map = mapping.new_SwMapping("SwcMap")
+swc_map.set_ecuInstance(ecu)
+swc_map.add_contextComponent(proto)""",
 }
 
 
@@ -281,6 +319,9 @@ def get_relevant_patterns(task_text: str, max_patterns: int = 3) -> str:
         "data_access": ["data send", "data receive", "access", "datasendpoint"],
         "composition": ["composition", "connector", "assembly", "prototype"],
         "edit_mode": ["edit", "modify", "existing", "read"],
+        "compu_method": ["compu", "linear", "formula", "scaling", "conversion"],
+        "data_constr": ["constraint", "limit", "range", "min", "max"],
+        "system_mapping": ["system", "ecu", "mapping", "deployment"],
     }
 
     scored = []

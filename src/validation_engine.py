@@ -138,12 +138,17 @@ class PreGenerationValidator:
             ))
 
         # 4. Check common mistakes
-        if re.search(r'autosarfactory\.save\([^)]+\)', code):
-            issues.append(ValidationIssue(
-                category=ValidationCategory.SEMANTIC,
-                severity=ValidationSeverity.ERROR,
-                message="save() takes no arguments"
-            ))
+        # save() can optionally take a list of filenames
+        save_match = re.search(r'autosarfactory\.save\(([^)]+)\)', code)
+        if save_match:
+            arg = save_match.group(1).strip()
+            # Only flag if passing a non-list arg like save(root) or save("file")
+            if not arg.startswith('[') and '"' in arg and ',' not in arg:
+                issues.append(ValidationIssue(
+                    category=ValidationCategory.SEMANTIC,
+                    severity=ValidationSeverity.WARNING,
+                    message="save() with single filename should use list: save(['file.arxml'])"
+                ))
 
         if re.search(r'set_packingByteOrder\(["\']', code):
             issues.append(ValidationIssue(
